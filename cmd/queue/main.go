@@ -24,7 +24,9 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/knative/serving/pkg/utils"
@@ -45,6 +47,7 @@ import (
 	"github.com/knative/serving/pkg/queue/health"
 	queuestats "github.com/knative/serving/pkg/queue/stats"
 	"go.uber.org/zap"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -83,10 +86,14 @@ var (
 	userTargetPort         int
 	userTargetAddress      string
 	containerConcurrency   int
+	allowAsync             bool
 	revisionTimeoutSeconds int
 	reqChan                = make(chan queue.ReqEvent, requestCountingQueueLength)
 	logger                 *zap.SugaredLogger
 	breaker                *queue.Breaker
+
+	asyncCallCache map[string]*queue.AsyncCallRecord
+	mux            sync.Mutex
 
 	h2cProxy  *httputil.ReverseProxy
 	httpProxy *httputil.ReverseProxy
@@ -110,6 +117,13 @@ func initEnv() {
 	revisionTimeoutSeconds = util.MustParseIntEnvOrFatal("REVISION_TIMEOUT_SECONDS", logger)
 	userTargetPort = util.MustParseIntEnvOrFatal("USER_PORT", logger)
 	userTargetAddress = fmt.Sprintf("127.0.0.1:%d", userTargetPort)
+	allowAsyncEnv := util.GetRequiredEnvOrFatal("ALLOW_ASYNC", logger)
+
+	var err error
+	allowAsync, err = strconv.ParseBool(allowAsyncEnv)
+	if err != nil {
+		logger.Fatalw("Failed to parse ALLOW_ASYNC", zap.Error(err))
+	}
 
 	// TODO(mattmoor): Move this key to be in terms of the KPA.
 	servingRevisionKey = autoscaler.NewMetricKey(servingNamespace, servingRevision)
@@ -199,18 +213,92 @@ func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2c
 			reqChan <- queue.ReqEvent{Time: time.Now(), EventType: out}
 		}()
 
+		var asyncReq bool
+		var err error
+
+		asyncReqHeader := r.Header.Get("Async")
+		if asyncReqHeader != "" {
+			asyncReq, err = strconv.ParseBool(asyncReqHeader)
+			if err != nil {
+				http.Error(w, "invalid async value", http.StatusBadRequest)
+				return
+			}
+		}
+
 		// Enforce queuing and concurrency limits
 		if breaker != nil {
 			ok := breaker.Maybe(func() {
-				proxy.ServeHTTP(w, r)
+				handleRequest(w, r, proxy, asyncReq)
 			})
 			if !ok {
 				http.Error(w, "overload", http.StatusServiceUnavailable)
 			}
 		} else {
-			proxy.ServeHTTP(w, r)
+			handleRequest(w, r, proxy, asyncReq)
 		}
 	}
+}
+
+func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.ReverseProxy, asyncReq bool) {
+	logger.Infof("handle request - asyncReq: %t - allowAsync: %t", asyncReq, allowAsync)
+
+	if !asyncReq {
+		proxy.ServeHTTP(w, r)
+		return
+	}
+
+	if !allowAsync {
+		http.Error(w, "async request not enabled", http.StatusBadRequest)
+		return
+	}
+
+	asyncUUID := r.Header.Get("Async-UUID")
+	if asyncUUID == "" {
+		guid := string(uuid.NewUUID())
+
+		go func(reqGuid string) {
+			record := queue.AsyncCallRecord{
+				Guid:   reqGuid,
+				Status: queue.InProgress,
+				Resp:   &queue.ResponseCache{},
+			}
+
+			mux.Lock()
+			asyncCallCache[reqGuid] = &record
+			mux.Unlock()
+
+			rr := r.WithContext(context.Background())
+			proxy.ServeHTTP(record.Resp, rr)
+
+			record.Status = queue.Ready
+			logger.Infof("record %#v", record)
+			logger.Info("done!")
+		}(guid)
+
+		w.WriteHeader(http.StatusAccepted)
+		w.Write([]byte(guid))
+		return
+	}
+
+	record, ok := asyncCallCache[asyncUUID]
+	if !ok {
+		http.Error(w, "async guid not found", http.StatusNotFound)
+		return
+	}
+
+	if record.Status == queue.InProgress {
+		logger.Info("processing async...")
+		w.WriteHeader(http.StatusFound)
+		return
+	}
+
+	logger.Info("return response and delete record")
+	w.WriteHeader(record.Resp.StatusCode)
+	w.Write(record.Resp.Body)
+
+	mux.Lock()
+	delete(asyncCallCache, asyncUUID)
+	mux.Unlock()
 }
 
 // Sets up /health and /wait-for-drain endpoints.
@@ -237,6 +325,8 @@ func main() {
 	if err != nil {
 		logger.Fatalw("Failed to parse localhost url", zap.Error(err))
 	}
+
+	asyncCallCache = make(map[string]*queue.AsyncCallRecord)
 
 	httpProxy = httputil.NewSingleHostReverseProxy(target)
 	httpProxy.FlushInterval = -1

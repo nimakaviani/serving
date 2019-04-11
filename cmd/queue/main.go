@@ -202,19 +202,9 @@ func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2c
 			return
 		}
 
-		// Metrics for autoscaling
-		h := knativeProxyHeader(r)
-		in, out := queue.ReqIn, queue.ReqOut
-		if activator.Name == h {
-			in, out = queue.ProxiedIn, queue.ProxiedOut
-		}
-		reqChan <- queue.ReqEvent{Time: time.Now(), EventType: in}
-		defer func() {
-			reqChan <- queue.ReqEvent{Time: time.Now(), EventType: out}
-		}()
-
 		var asyncReq bool
 		var err error
+		doneChan := make(chan struct{})
 
 		asyncReqHeader := r.Header.Get("Async")
 		if asyncReqHeader != "" {
@@ -223,32 +213,49 @@ func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2c
 				http.Error(w, "invalid async value", http.StatusBadRequest)
 				return
 			}
+
+			if !allowAsync && asyncReq {
+				http.Error(w, "async request not enabled", http.StatusBadRequest)
+				return
+			}
 		}
+
+		// Metrics for autoscaling
+		h := knativeProxyHeader(r)
+		in, out := queue.ReqIn, queue.ReqOut
+		if activator.Name == h {
+			in, out = queue.ProxiedIn, queue.ProxiedOut
+		}
+		reqChan <- queue.ReqEvent{Time: time.Now(), EventType: in}
+		defer func() {
+			go func() {
+				if asyncReq {
+					<-doneChan
+				}
+				reqChan <- queue.ReqEvent{Time: time.Now(), EventType: out}
+			}()
+		}()
 
 		// Enforce queuing and concurrency limits
 		if breaker != nil {
 			ok := breaker.Maybe(func() {
-				handleRequest(w, r, proxy, asyncReq)
+				handleRequest(w, r, proxy, asyncReq, doneChan)
 			})
 			if !ok {
 				http.Error(w, "overload", http.StatusServiceUnavailable)
 			}
 		} else {
-			handleRequest(w, r, proxy, asyncReq)
+			handleRequest(w, r, proxy, asyncReq, doneChan)
 		}
 	}
 }
 
-func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.ReverseProxy, asyncReq bool) {
+func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.ReverseProxy, asyncReq bool, doneChan chan struct{}) {
 	logger.Infof("handle request - asyncReq: %t - allowAsync: %t", asyncReq, allowAsync)
 
 	if !asyncReq {
 		proxy.ServeHTTP(w, r)
-		return
-	}
-
-	if !allowAsync {
-		http.Error(w, "async request not enabled", http.StatusBadRequest)
+		close(doneChan)
 		return
 	}
 
@@ -257,6 +264,8 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 		guid := string(uuid.NewUUID())
 
 		go func(reqGuid string) {
+			defer close(doneChan)
+
 			record := queue.AsyncCallRecord{
 				Guid:   reqGuid,
 				Status: queue.InProgress,
@@ -280,6 +289,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 		return
 	}
 
+	defer close(doneChan)
 	record, ok := asyncCallCache[asyncUUID]
 	if !ok {
 		http.Error(w, "async guid not found", http.StatusNotFound)

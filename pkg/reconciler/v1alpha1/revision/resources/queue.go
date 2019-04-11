@@ -120,8 +120,7 @@ func makeQueueContainer(rev *v1alpha1.Revision, loggingConfig *logging.Config, o
 			Value: strconv.Itoa(int(rev.Spec.ContainerConcurrency)),
 		}, {
 			Name:  "ALLOW_ASYNC",
-			Value: "true",
-			// Value: rev.Spec.AllowAsync,
+			Value: strconv.FormatBool(rev.Spec.AllowAsync),
 		}, {
 			Name:  "REVISION_TIMEOUT_SECONDS",
 			Value: strconv.Itoa(int(ts)),

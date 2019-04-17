@@ -33,6 +33,7 @@ import (
 
 	"github.com/knative/pkg/signals"
 
+	"github.com/cloudevents/sdk-go/pkg/cloudevents/client"
 	"github.com/knative/pkg/logging/logkey"
 	"github.com/knative/pkg/metrics"
 	"github.com/knative/serving/cmd/util"
@@ -87,10 +88,12 @@ var (
 	userTargetAddress      string
 	containerConcurrency   int
 	allowAsync             bool
+	sinkURL                string
 	revisionTimeoutSeconds int
 	reqChan                = make(chan queue.ReqEvent, requestCountingQueueLength)
 	logger                 *zap.SugaredLogger
 	breaker                *queue.Breaker
+	c                      client.Client
 
 	asyncCallCache map[string]*queue.AsyncCallRecord
 	mux            sync.Mutex
@@ -118,11 +121,17 @@ func initEnv() {
 	userTargetPort = util.MustParseIntEnvOrFatal("USER_PORT", logger)
 	userTargetAddress = fmt.Sprintf("127.0.0.1:%d", userTargetPort)
 	allowAsyncEnv := util.GetRequiredEnvOrFatal("ALLOW_ASYNC", logger)
+	sinkURL = os.Getenv("SINK_URL")
 
 	var err error
 	allowAsync, err = strconv.ParseBool(allowAsyncEnv)
 	if err != nil {
 		logger.Fatalw("Failed to parse ALLOW_ASYNC", zap.Error(err))
+	}
+
+	if allowAsync {
+		logger.Infof("sinkURL %s", sinkURL)
+		c = NewClient(sinkURL)
 	}
 
 	// TODO(mattmoor): Move this key to be in terms of the KPA.
@@ -239,18 +248,18 @@ func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2c
 		// Enforce queuing and concurrency limits
 		if breaker != nil {
 			ok := breaker.Maybe(func() {
-				handleRequest(w, r, proxy, asyncReq, doneChan)
+				handleRequest(w, r, c, proxy, asyncReq, doneChan)
 			})
 			if !ok {
 				http.Error(w, "overload", http.StatusServiceUnavailable)
 			}
 		} else {
-			handleRequest(w, r, proxy, asyncReq, doneChan)
+			handleRequest(w, r, c, proxy, asyncReq, doneChan)
 		}
 	}
 }
 
-func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.ReverseProxy, asyncReq bool, doneChan chan struct{}) {
+func handleRequest(w http.ResponseWriter, r *http.Request, c client.Client, proxy *httputil.ReverseProxy, asyncReq bool, doneChan chan struct{}) {
 	logger.Infof("handle request - asyncReq: %t - allowAsync: %t", asyncReq, allowAsync)
 
 	if !asyncReq {
@@ -277,7 +286,14 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 			mux.Unlock()
 
 			rr := r.WithContext(context.Background())
-			proxy.ServeHTTP(record.Resp, rr)
+			// proxy.ServeHTTP(record.Resp, rr)
+			err := SendInfo(c, Request{
+				Url:    rr.URL.RequestURI(),
+				Params: rr.URL.Query(),
+			}, os.Getenv("SERVING_SERVICE"), guid)
+			if err != nil {
+				logger.Errorf("failed to send event %#v", err)
+			}
 
 			record.Status = queue.Ready
 			logger.Infof("record %#v", record)

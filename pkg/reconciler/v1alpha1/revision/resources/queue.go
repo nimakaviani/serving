@@ -122,6 +122,9 @@ func makeQueueContainer(rev *v1alpha1.Revision, loggingConfig *logging.Config, o
 			Name:  "ALLOW_ASYNC",
 			Value: strconv.FormatBool(rev.Spec.AllowAsync),
 		}, {
+			Name:  "SINK_URL",
+			Value: rev.Spec.SinkURL,
+		}, {
 			Name:  "REVISION_TIMEOUT_SECONDS",
 			Value: strconv.Itoa(int(ts)),
 		}, {

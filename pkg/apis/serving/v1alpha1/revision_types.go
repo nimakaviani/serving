@@ -148,6 +148,8 @@ type RevisionSpec struct {
 
 	AllowAsync bool `json:"allowAsync",omitempty`
 
+	SinkURL string `json:"sinkURL",omitempty`
+
 	// ServiceAccountName holds the name of the Kubernetes service account
 	// as which the underlying K8s resources should be run. If unspecified
 	// this will default to the "default" service account for the namespace

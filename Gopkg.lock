@@ -141,6 +141,26 @@
   version = "v0.1.0"
 
 [[projects]]
+  digest = "1:fa1c3e6de410f74eb102fd927c838a66feb5b825fdf63d0e82cbbfd1a16db8a1"
+  name = "github.com/cloudevents/sdk-go"
+  packages = [
+    "pkg/cloudevents",
+    "pkg/cloudevents/client",
+    "pkg/cloudevents/codec",
+    "pkg/cloudevents/context",
+    "pkg/cloudevents/datacodec",
+    "pkg/cloudevents/datacodec/json",
+    "pkg/cloudevents/datacodec/xml",
+    "pkg/cloudevents/observability",
+    "pkg/cloudevents/transport",
+    "pkg/cloudevents/transport/http",
+    "pkg/cloudevents/types",
+  ]
+  pruneopts = "NUT"
+  revision = "51b1fb67ea02b6edb9c158592f4c996d6edd1493"
+  version = "0.6.0"
+
+[[projects]]
   digest = "1:ffe9824d294da03b391f44e1ae8281281b4afc1bdaa9588c9097785e3af10cec"
   name = "github.com/davecgh/go-spew"
   packages = ["spew"]
@@ -325,6 +345,14 @@
   revision = "e979a0b10eebe748549c702a25e997c556349da6"
 
 [[projects]]
+  digest = "1:ab3ec1fe3e39bac4b3ab63390767766622be35b7cab03f47f787f9ec60522a53"
+  name = "github.com/google/uuid"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "0cd6bf5da1e1c83f8b45653022c74f71af0538a4"
+  version = "v1.1.1"
+
+[[projects]]
   digest = "1:fb9f5147a9d6fc69057d05b0739bcd79562c55db143c3bdacfe1c9c6129461f6"
   name = "github.com/googleapis/gax-go"
   packages = ["."]
@@ -433,6 +461,14 @@
   ]
   pruneopts = "T"
   revision = "babf400eeec07acdd0d6864ad28709c2bcee0c82"
+
+[[projects]]
+  digest = "1:067a241f3d8511e43ae1df08337a3cf2475d82b90c31cb4c43e4936cd5808d3c"
+  name = "github.com/knative/eventing-sources"
+  packages = ["pkg/kncloudevents"]
+  pruneopts = "NUT"
+  revision = "32ce3778fa1bc46ed0b0ade16d5c57f343cafa4d"
+  version = "v0.5.0"
 
 [[projects]]
   digest = "1:52a75d98bad8b65086883c86e7b617dc2ae425d70a9f950138d40807976f8338"
@@ -554,6 +590,14 @@
   pruneopts = "NUT"
   revision = "4b7aa43c6742a2c18fdef89dd197aaae7dac7ccd"
   version = "1.0.1"
+
+[[projects]]
+  digest = "1:93b1d84c5fa6d1ea52f4114c37714cddd84d5b78f151b62bb101128dd51399bf"
+  name = "github.com/pborman/uuid"
+  packages = ["."]
+  pruneopts = "NUT"
+  revision = "adf5a7427709b9deb95d29d3fa8a2bf9cfd388f1"
+  version = "v1.2"
 
 [[projects]]
   branch = "master"
@@ -972,7 +1016,7 @@
   version = "kubernetes-1.12.6"
 
 [[projects]]
-  digest = "1:119ae04ee44c5d179dcde1ee686f057cfe3fc54a7ee8484b920932a80309e88b"
+  digest = "1:58293c3a67fbca0336cd3cc2140dfe630545694452cf73980d2e4b6e6ce2660c"
   name = "k8s.io/apimachinery"
   packages = [
     "pkg/api/equality",
@@ -1013,6 +1057,7 @@
     "pkg/util/sets",
     "pkg/util/sets/types",
     "pkg/util/strategicpatch",
+    "pkg/util/uuid",
     "pkg/util/validation",
     "pkg/util/validation/field",
     "pkg/util/wait",
@@ -1297,6 +1342,8 @@
   analyzer-name = "dep"
   analyzer-version = 1
   input-imports = [
+    "github.com/cloudevents/sdk-go/pkg/cloudevents",
+    "github.com/cloudevents/sdk-go/pkg/cloudevents/client",
     "github.com/davecgh/go-spew/spew",
     "github.com/ghodss/yaml",
     "github.com/golang/protobuf/proto",
@@ -1317,6 +1364,7 @@
     "github.com/knative/caching/pkg/client/informers/externalversions",
     "github.com/knative/caching/pkg/client/informers/externalversions/caching/v1alpha1",
     "github.com/knative/caching/pkg/client/listers/caching/v1alpha1",
+    "github.com/knative/eventing-sources/pkg/kncloudevents",
     "github.com/knative/pkg/apis",
     "github.com/knative/pkg/apis/duck",
     "github.com/knative/pkg/apis/duck/v1alpha1",
@@ -1399,6 +1447,7 @@
     "k8s.io/apimachinery/pkg/util/runtime",
     "k8s.io/apimachinery/pkg/util/sets",
     "k8s.io/apimachinery/pkg/util/sets/types",
+    "k8s.io/apimachinery/pkg/util/uuid",
     "k8s.io/apimachinery/pkg/util/validation",
     "k8s.io/apimachinery/pkg/util/wait",
     "k8s.io/apimachinery/pkg/watch",

@@ -92,8 +92,9 @@ var (
 	logger                 *zap.SugaredLogger
 	breaker                *queue.Breaker
 
-	asyncCallCache map[string]*queue.AsyncCallRecord
-	mux            sync.Mutex
+	asyncCallCache       map[string]*queue.AsyncCallRecord
+	activeAsyncCallCount int
+	mux                  sync.Mutex
 
 	h2cProxy  *httputil.ReverseProxy
 	httpProxy *httputil.ReverseProxy
@@ -251,7 +252,7 @@ func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2c
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.ReverseProxy, asyncReq bool, doneChan chan struct{}) {
-	logger.Infof("handle request - asyncReq: %t - allowAsync: %t - queueLength: %d", asyncReq, allowAsync, len(asyncCallCache))
+	logger.Infof("handle request - asyncReq: %t - allowAsync: %t - queueLength: %d", asyncReq, allowAsync, activeAsyncCallCount)
 
 	if !asyncReq {
 		proxy.ServeHTTP(w, r)
@@ -266,7 +267,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 		go func(reqGuid string) {
 			defer close(doneChan)
 
-			logger.Infof("processing %s", reqGuid)
+			logger.Infof("processing: %s", reqGuid)
 
 			record := queue.AsyncCallRecord{
 				Guid:   reqGuid,
@@ -274,6 +275,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 				Resp:   &queue.ResponseCache{},
 			}
 
+			activeAsyncCallCount += 1
 			mux.Lock()
 			asyncCallCache[reqGuid] = &record
 			mux.Unlock()
@@ -281,9 +283,9 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 			rr := r.WithContext(context.Background())
 			proxy.ServeHTTP(record.Resp, rr)
 
+			activeAsyncCallCount -= 1
 			record.Status = queue.Ready
-			logger.Infof("record %#v", record)
-			logger.Info("done!")
+			logger.Infof("done! - record %s %d %s", record.Guid, record.Status, string(record.Resp.Body))
 		}(guid)
 
 		w.WriteHeader(http.StatusAccepted)
@@ -299,7 +301,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 	}
 
 	if record.Status == queue.InProgress {
-		logger.Infof("processing async %s", asyncUUID)
+		logger.Infof("processing-async-in-progress: %s", asyncUUID)
 		w.WriteHeader(http.StatusFound)
 		return
 	}
@@ -417,6 +419,18 @@ func main() {
 		healthState.Shutdown(func() {
 			// Give istio time to sync our "not ready" state
 			time.Sleep(quitSleepDuration)
+
+			// wait for the in-flight async requests to finish
+			if allowAsync {
+				for {
+					logger.Infof("waiting for clear cache - queueLength: %d", activeAsyncCallCount)
+					if activeAsyncCallCount == 0 {
+						break
+					}
+					time.Sleep(1 * time.Minute)
+				}
+			}
+			logger.Info("done-draining-queue!")
 
 			// Calling server.Shutdown() allows pending requests to
 			// complete, while no new work is accepted.

@@ -251,7 +251,7 @@ func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2c
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.ReverseProxy, asyncReq bool, doneChan chan struct{}) {
-	logger.Infof("handle request - asyncReq: %t - allowAsync: %t", asyncReq, allowAsync)
+	logger.Infof("handle request - asyncReq: %t - allowAsync: %t - queueLength: %d", asyncReq, allowAsync, len(asyncCallCache))
 
 	if !asyncReq {
 		proxy.ServeHTTP(w, r)
@@ -265,6 +265,8 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 
 		go func(reqGuid string) {
 			defer close(doneChan)
+
+			logger.Infof("processing %s", reqGuid)
 
 			record := queue.AsyncCallRecord{
 				Guid:   reqGuid,
@@ -285,7 +287,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 		}(guid)
 
 		w.WriteHeader(http.StatusAccepted)
-		w.Write([]byte(guid))
+		w.Write([]byte(fmt.Sprintf("%s  %s", guid, os.Getenv("SERVING_POD"))))
 		return
 	}
 
@@ -297,12 +299,12 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 	}
 
 	if record.Status == queue.InProgress {
-		logger.Info("processing async...")
+		logger.Infof("processing async %s", asyncUUID)
 		w.WriteHeader(http.StatusFound)
 		return
 	}
 
-	logger.Info("return response and delete record")
+	logger.Info("return response and delete record %s", asyncUUID)
 	w.WriteHeader(record.Resp.StatusCode)
 	w.Write(record.Resp.Body)
 

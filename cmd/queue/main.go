@@ -252,7 +252,7 @@ func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2c
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.ReverseProxy, asyncReq bool, doneChan chan struct{}) {
-	logger.Infof("handle request - asyncReq: %t - allowAsync: %t - queueLength: %d", asyncReq, allowAsync, activeAsyncCallCount)
+	logger.Infof("handle request - asyncReq: %t - allowAsync: %t - inflight: %d", asyncReq, allowAsync, activeAsyncCallCount)
 
 	if !asyncReq {
 		proxy.ServeHTTP(w, r)
@@ -423,7 +423,7 @@ func main() {
 			// wait for the in-flight async requests to finish
 			if allowAsync {
 				for {
-					logger.Infof("waiting for clear cache - queueLength: %d", activeAsyncCallCount)
+					logger.Infof("waiting for clear cache - inflight: %d", activeAsyncCallCount)
 					if activeAsyncCallCount == 0 {
 						break
 					}

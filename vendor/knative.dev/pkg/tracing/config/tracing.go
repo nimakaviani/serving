@@ -36,6 +36,7 @@ const (
 	debugKey                = "debug"
 	sampleRateKey           = "sample-rate"
 	stackdriverProjectIDKey = "stackdriver-project-id"
+	kubeResourceTracingKey  = "kube-resource-tracing"
 )
 
 // BackendType specifies the backend to use for tracing
@@ -56,8 +57,9 @@ type Config struct {
 	ZipkinEndpoint       string
 	StackdriverProjectID string
 
-	Debug      bool
-	SampleRate float64
+	Debug               bool
+	SampleRate          float64
+	KubeResourceTracing bool
 }
 
 // Equals returns true if two Configs are identical
@@ -68,9 +70,10 @@ func (cfg *Config) Equals(other *Config) bool {
 // NewTracingConfigFromMap returns a Config given a map corresponding to a ConfigMap
 func NewTracingConfigFromMap(cfgMap map[string]string) (*Config, error) {
 	tc := Config{
-		Backend:    None,
-		Debug:      false,
-		SampleRate: 0.1,
+		Backend:             None,
+		Debug:               false,
+		SampleRate:          0.1,
+		KubeResourceTracing: false,
 	}
 
 	if backend, ok := cfgMap[backendKey]; ok {
@@ -91,6 +94,14 @@ func NewTracingConfigFromMap(cfgMap map[string]string) (*Config, error) {
 				tc.Backend = Zipkin
 			}
 		}
+	}
+
+	if rtRaw, ok := cfgMap[kubeResourceTracingKey]; ok {
+		rt, err := strconv.ParseBool(rtRaw)
+		if err != nil {
+			return nil, fmt.Errorf("Failed parsing %q: %v", kubeResourceTracingKey, err)
+		}
+		tc.KubeResourceTracing = rt
 	}
 
 	if endpoint, ok := cfgMap[zipkinEndpointKey]; !ok && tc.Backend == Zipkin {

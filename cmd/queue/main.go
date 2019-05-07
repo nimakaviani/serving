@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"net/http"
@@ -33,6 +34,7 @@ import (
 
 	"github.com/knative/pkg/signals"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/knative/pkg/logging/logkey"
 	"github.com/knative/pkg/metrics"
 	"github.com/knative/serving/cmd/util"
@@ -40,14 +42,15 @@ import (
 	activatorutil "github.com/knative/serving/pkg/activator/util"
 	"github.com/knative/serving/pkg/apis/serving/v1alpha1"
 	"github.com/knative/serving/pkg/autoscaler"
+	"github.com/knative/serving/pkg/database"
 	"github.com/knative/serving/pkg/http/h2c"
 	"github.com/knative/serving/pkg/logging"
 	"github.com/knative/serving/pkg/network"
 	"github.com/knative/serving/pkg/queue"
 	"github.com/knative/serving/pkg/queue/health"
 	queuestats "github.com/knative/serving/pkg/queue/stats"
+	"github.com/lib/pq"
 	"go.uber.org/zap"
-	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -92,6 +95,10 @@ var (
 	logger                 *zap.SugaredLogger
 	breaker                *queue.Breaker
 
+	databaseURL    string
+	databaseDriver string
+	sqlDB          *database.SQLDB
+
 	asyncCallCache       map[string]*queue.AsyncCallRecord
 	activeAsyncCallCount int
 	mux                  sync.Mutex
@@ -119,11 +126,40 @@ func initEnv() {
 	userTargetPort = util.MustParseIntEnvOrFatal("USER_PORT", logger)
 	userTargetAddress = fmt.Sprintf("127.0.0.1:%d", userTargetPort)
 	allowAsyncEnv := util.GetRequiredEnvOrFatal("ALLOW_ASYNC", logger)
+	databaseURL = os.Getenv("DATABASE_CONNECTION_STRING")
+	databaseDriver = os.Getenv("DATABASE_DRIVER")
 
 	var err error
 	allowAsync, err = strconv.ParseBool(allowAsyncEnv)
 	if err != nil {
 		logger.Fatalw("Failed to parse ALLOW_ASYNC", zap.Error(err))
+	}
+
+	// setup database if async is set
+	if allowAsync {
+		if databaseURL == "" || databaseDriver == "" {
+			logger.Fatal("no database information present for async")
+		}
+
+		connectionString := initializeDB(databaseDriver, databaseURL)
+		sqlConn, err := sql.Open(databaseDriver, connectionString)
+		if err != nil {
+			logger.Fatalw("failed-to-open-sql", zap.Error(err))
+		}
+		defer sqlConn.Close()
+
+		err = sqlConn.Ping()
+		if err != nil {
+			logger.Fatalw("sql-failed-to-connect", zap.Error(err))
+		}
+
+		queryMonitor := database.NewMonitor()
+		monitoredDB := database.NewMonitoredDB(sqlConn, queryMonitor)
+		sqlDB = database.NewSQLDB(monitoredDB, databaseDriver)
+		err = sqlDB.CreateAsyncTable()
+		if err != nil {
+			logger.Fatalw("failed-to-create-table", zap.Error(err))
+		}
 	}
 
 	// TODO(mattmoor): Move this key to be in terms of the KPA.
@@ -176,7 +212,7 @@ func probeUserContainer() bool {
 }
 
 // Make handler a closure for testing.
-func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2cProxy *httputil.ReverseProxy) func(http.ResponseWriter, *http.Request) {
+func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2cProxy *httputil.ReverseProxy, sqlDB *database.SQLDB) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		proxy := httpProxy
 		if r.ProtoMajor == 2 {
@@ -240,18 +276,18 @@ func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2c
 		// Enforce queuing and concurrency limits
 		if breaker != nil {
 			ok := breaker.Maybe(func() {
-				handleRequest(w, r, proxy, asyncReq, doneChan)
+				handleRequest(w, r, proxy, sqlDB, asyncReq, doneChan)
 			})
 			if !ok {
 				http.Error(w, "overload", http.StatusServiceUnavailable)
 			}
 		} else {
-			handleRequest(w, r, proxy, asyncReq, doneChan)
+			handleRequest(w, r, proxy, sqlDB, asyncReq, doneChan)
 		}
 	}
 }
 
-func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.ReverseProxy, asyncReq bool, doneChan chan struct{}) {
+func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.ReverseProxy, sqlDB *database.SQLDB, asyncReq bool, doneChan chan struct{}) {
 	logger.Infof("handle request - asyncReq: %t - allowAsync: %t - inflight: %d", asyncReq, allowAsync, activeAsyncCallCount)
 
 	if !asyncReq {
@@ -262,41 +298,41 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 
 	asyncUUID := r.Header.Get("Async-UUID")
 	if asyncUUID == "" {
-		guid := string(uuid.NewUUID())
+		pod := os.Getenv("SERVING_POD")
 
-		go func(reqGuid string) {
+		guid, err := sqlDB.CreateAsyncReq(pod)
+		if err != nil {
+			http.Error(w, "record-to-db-failed", http.StatusBadRequest)
+		}
+
+		logger.Infof("processing: %s", guid)
+		activeAsyncCallCount += 1
+
+		go func(reqGuid string, req *http.Request) {
 			defer close(doneChan)
 
-			logger.Infof("processing: %s", reqGuid)
-
-			record := queue.AsyncCallRecord{
-				Guid:   reqGuid,
-				Status: queue.InProgress,
-				Resp:   &queue.ResponseCache{},
-			}
-
-			activeAsyncCallCount += 1
-			mux.Lock()
-			asyncCallCache[reqGuid] = &record
-			mux.Unlock()
-
-			rr := r.WithContext(context.Background())
-			proxy.ServeHTTP(record.Resp, rr)
+			resp := queue.ResponseCache{}
+			proxy.ServeHTTP(&resp, req)
 
 			activeAsyncCallCount -= 1
-			record.Status = queue.Ready
-			logger.Infof("done! - record %s %d %s", record.Guid, record.Status, string(record.Resp.Body))
-		}(guid)
+			err = sqlDB.UpdateAsyncReq(guid, queue.Ready, resp.Body, resp.StatusCode)
+			if err != nil {
+				logger.Errorw("failed-to-record-resp", zap.Error(err))
+			} else {
+				logger.Infof("done! - record %s %s", guid, string(resp.Body))
+			}
+		}(guid, r.WithContext(context.Background()))
 
 		w.WriteHeader(http.StatusAccepted)
-		w.Write([]byte(fmt.Sprintf("%s  %s", guid, os.Getenv("SERVING_POD"))))
+		w.Write([]byte(fmt.Sprintf("%s  %s", guid, pod)))
 		return
 	}
 
 	defer close(doneChan)
-	record, ok := asyncCallCache[asyncUUID]
-	if !ok {
-		http.Error(w, "async guid not found", http.StatusNotFound)
+	record, err := sqlDB.FetchRecord(asyncUUID)
+	if err != nil {
+		logger.Error("failed-to-fetch", zap.Error(err))
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -307,12 +343,13 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 	}
 
 	logger.Info("return response and delete record %s", asyncUUID)
-	w.WriteHeader(record.Resp.StatusCode)
-	w.Write(record.Resp.Body)
+	w.WriteHeader(record.StatusCode)
+	w.Write(record.Body)
 
-	mux.Lock()
-	delete(asyncCallCache, asyncUUID)
-	mux.Unlock()
+	err = sqlDB.DeleteRecord(asyncUUID)
+	if err != nil {
+		logger.Error("failed-to-delete", zap.Error(err))
+	}
 }
 
 // Sets up /health and /wait-for-drain endpoints.
@@ -387,7 +424,7 @@ func main() {
 		Handler: createAdminHandlers(),
 	}
 
-	timeoutHandler := queue.TimeToFirstByteTimeoutHandler(http.HandlerFunc(handler(reqChan, breaker, httpProxy, h2cProxy)),
+	timeoutHandler := queue.TimeToFirstByteTimeoutHandler(http.HandlerFunc(handler(reqChan, breaker, httpProxy, h2cProxy, sqlDB)),
 		time.Duration(revisionTimeoutSeconds)*time.Second, "request timeout")
 	composedHandler := pushRequestMetricHandler(pushRequestLogHandler(timeoutHandler))
 	server = h2c.NewServer(fmt.Sprintf(":%d", v1alpha1.RequestQueuePort), composedHandler)
@@ -514,4 +551,29 @@ func flush(logger *zap.SugaredLogger) {
 	logger.Sync()
 	os.Stdout.Sync()
 	os.Stderr.Sync()
+}
+
+func initializeDB(databaseConnectionString, databaseDriver string) string {
+	var connectionString string
+	switch databaseDriver {
+	case "mysql":
+		cfg, err := mysql.ParseDSN(databaseConnectionString)
+		if err != nil {
+			logger.Fatalw("invalid-connection-string", zap.Error(err))
+		}
+
+		cfg.Timeout = 10 * time.Minute
+		cfg.ReadTimeout = 10 * time.Minute
+		cfg.WriteTimeout = 10 * time.Minute
+		connectionString = cfg.FormatDSN()
+	case "postgres":
+		var err error
+		databaseConnectionString, err = pq.ParseURL(databaseConnectionString)
+		if err != nil {
+			logger.Fatalw("invalid-connection-string", zap.Error(err))
+		}
+		connectionString = databaseConnectionString + "?sslmode=disable"
+	}
+
+	return connectionString
 }

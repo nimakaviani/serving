@@ -24,6 +24,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+type Database struct {
+	Driver           string `json:"driver"`
+	ConnectionString string `json:"connectionString"`
+}
+
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
@@ -146,7 +151,9 @@ type RevisionSpec struct {
 	// +optional
 	ContainerConcurrency RevisionContainerConcurrencyType `json:"containerConcurrency,omitempty"`
 
-	AllowAsync *bool `json:"allowAsync",omitempty`
+	AllowAsync *bool `json:"allowAsync,omitempty"`
+
+	Database Database `json:"database,omitempty"`
 
 	// ServiceAccountName holds the name of the Kubernetes service account
 	// as which the underlying K8s resources should be run. If unspecified

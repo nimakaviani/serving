@@ -12,9 +12,11 @@ const (
 )
 
 type AsyncCallRecord struct {
-	Guid   string
-	Resp   *ResponseCache
-	Status Status
+	Guid       string
+	Pod        string
+	Status     Status
+	StatusCode int
+	Body       []byte
 }
 
 type ResponseCache struct {

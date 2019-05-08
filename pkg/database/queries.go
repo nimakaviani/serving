@@ -93,6 +93,10 @@ func (db *SQLDB) FetchRecord(guid string) (*queue.AsyncCallRecord, error) {
 
 		records, err = db.scanRecord(rows)
 
+		if err != nil {
+			return err
+		}
+
 		if len(records) != 1 {
 			return errors.New("multiple-records-found")
 		}

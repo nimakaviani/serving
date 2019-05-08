@@ -51,6 +51,7 @@ import (
 	queuestats "github.com/knative/serving/pkg/queue/stats"
 	"github.com/lib/pq"
 	"go.uber.org/zap"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -95,9 +96,10 @@ var (
 	logger                 *zap.SugaredLogger
 	breaker                *queue.Breaker
 
-	databaseURL    string
-	databaseDriver string
-	sqlDB          *database.SQLDB
+	databaseConnectionString string
+	databaseDriver           string
+	sqlDB                    *database.SQLDB
+	sqlConn                  *sql.DB
 
 	asyncCallCache       map[string]*queue.AsyncCallRecord
 	activeAsyncCallCount int
@@ -126,7 +128,7 @@ func initEnv() {
 	userTargetPort = util.MustParseIntEnvOrFatal("USER_PORT", logger)
 	userTargetAddress = fmt.Sprintf("127.0.0.1:%d", userTargetPort)
 	allowAsyncEnv := util.GetRequiredEnvOrFatal("ALLOW_ASYNC", logger)
-	databaseURL = os.Getenv("DATABASE_CONNECTION_STRING")
+	databaseConnectionString = os.Getenv("DATABASE_CONNECTION_STRING")
 	databaseDriver = os.Getenv("DATABASE_DRIVER")
 
 	var err error
@@ -137,16 +139,15 @@ func initEnv() {
 
 	// setup database if async is set
 	if allowAsync {
-		if databaseURL == "" || databaseDriver == "" {
+		if databaseConnectionString == "" || databaseDriver == "" {
 			logger.Fatal("no database information present for async")
 		}
 
-		connectionString := initializeDB(databaseDriver, databaseURL)
-		sqlConn, err := sql.Open(databaseDriver, connectionString)
+		logger.Infof("connection-string: %s -- %s", databaseDriver, databaseConnectionString)
+		sqlConn, err = sql.Open(databaseDriver, databaseConnectionString)
 		if err != nil {
 			logger.Fatalw("failed-to-open-sql", zap.Error(err))
 		}
-		defer sqlConn.Close()
 
 		err = sqlConn.Ping()
 		if err != nil {
@@ -297,31 +298,34 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 	}
 
 	asyncUUID := r.Header.Get("Async-UUID")
+	logger.Infof("Async-UUID: %s", asyncUUID)
 	if asyncUUID == "" {
 		pod := os.Getenv("SERVING_POD")
 
-		guid, err := sqlDB.CreateAsyncReq(pod)
-		if err != nil {
-			http.Error(w, "record-to-db-failed", http.StatusBadRequest)
-		}
-
-		logger.Infof("processing: %s", guid)
-		activeAsyncCallCount += 1
-
-		go func(reqGuid string, req *http.Request) {
+		guid := string(uuid.NewUUID())
+		go func(reqGuid string) {
 			defer close(doneChan)
 
-			resp := queue.ResponseCache{}
-			proxy.ServeHTTP(&resp, req)
+			err := sqlDB.CreateAsyncReq(reqGuid, pod)
+			if err != nil {
+				http.Error(w, "record-to-db-failed", http.StatusBadRequest)
+			}
 
-			activeAsyncCallCount -= 1
-			err = sqlDB.UpdateAsyncReq(guid, queue.Ready, resp.Body, resp.StatusCode)
+			logger.Infof("processing: %s", reqGuid)
+			activeAsyncCallCount += 1
+
+			rr := r.WithContext(context.Background())
+			resp := &queue.ResponseCache{}
+			proxy.ServeHTTP(resp, rr)
+
+			err = sqlDB.UpdateAsyncReq(reqGuid, queue.Ready, resp.Body, resp.StatusCode)
 			if err != nil {
 				logger.Errorw("failed-to-record-resp", zap.Error(err))
 			} else {
-				logger.Infof("done! - record %s %s", guid, string(resp.Body))
+				logger.Infof("done! - record %s %s", reqGuid, string(resp.Body))
 			}
-		}(guid, r.WithContext(context.Background()))
+			activeAsyncCallCount -= 1
+		}(guid)
 
 		w.WriteHeader(http.StatusAccepted)
 		w.Write([]byte(fmt.Sprintf("%s  %s", guid, pod)))
@@ -329,6 +333,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.Rever
 	}
 
 	defer close(doneChan)
+	logger.Infof("fetching-record: %s", asyncUUID)
 	record, err := sqlDB.FetchRecord(asyncUUID)
 	if err != nil {
 		logger.Error("failed-to-fetch", zap.Error(err))
@@ -481,6 +486,9 @@ func main() {
 			logger.Errorw("Failed to shutdown admin-server", zap.Error(err))
 		}
 	}
+
+	err = sqlConn.Close()
+	panic(err)
 }
 
 func pushRequestLogHandler(currentHandler http.Handler) http.Handler {
@@ -572,8 +580,9 @@ func initializeDB(databaseConnectionString, databaseDriver string) string {
 		if err != nil {
 			logger.Fatalw("invalid-connection-string", zap.Error(err))
 		}
-		connectionString = databaseConnectionString + "?sslmode=disable"
+		connectionString = databaseConnectionString
 	}
 
+	logger.Infof("db-connection-string %s", connectionString)
 	return connectionString
 }

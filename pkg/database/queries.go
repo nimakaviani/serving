@@ -7,7 +7,6 @@ import (
 
 	"github.com/knative/serving/pkg/queue"
 	"go.uber.org/zap"
-	"k8s.io/apimachinery/pkg/util/uuid"
 )
 
 const (
@@ -16,7 +15,7 @@ const (
 
 var (
 	recordColumns = ColumnList{
-		AsyncTable + ".uuid",
+		AsyncTable + ".guid",
 		AsyncTable + ".pod",
 		AsyncTable + ".status",
 		AsyncTable + ".body",
@@ -27,11 +26,11 @@ var (
 func (db *SQLDB) CreateAsyncTable() error {
 	_, err := db.db.Exec(`
 		CREATE TABLE IF NOT EXISTS async_table(
-			uuid VARCHAR(255) PRIMARY KEY,
+			guid VARCHAR(255) PRIMARY KEY,
 			pod VARCHAR(255) NOT NULL,
 			status INT NOT NULL,
-			body VARBINARY
-			statuscode INT
+			body BYTEA,
+			status_code INT
 		)
 	`)
 	if err != nil {
@@ -41,25 +40,24 @@ func (db *SQLDB) CreateAsyncTable() error {
 	return nil
 }
 
-func (db *SQLDB) CreateAsyncReq(pod string) (string, error) {
-	guid := string(uuid.NewUUID())
-
+func (db *SQLDB) CreateAsyncReq(guid, pod string) error {
 	err := db.transact(func(tx Tx) error {
 		_, err := db.insert(tx, AsyncTable,
 			SQLAttributes{
-				"uuid":   guid,
-				"pod":    pod,
-				"status": queue.InProgress,
+				"guid":        guid,
+				"pod":         pod,
+				"status":      queue.InProgress,
+				"status_code": 0,
 			},
 		)
 		return err
 	})
 
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	return guid, nil
+	return nil
 }
 
 func (db *SQLDB) UpdateAsyncReq(guid string, status queue.Status, body []byte, statusCode int) error {
@@ -134,7 +132,7 @@ func (db *SQLDB) scanRecord(rows *sql.Rows) ([]*queue.AsyncCallRecord, error) {
 	result := []*queue.AsyncCallRecord{}
 
 	for rows.Next() {
-		var record *queue.AsyncCallRecord
+		var record queue.AsyncCallRecord
 		err := rows.Scan(
 			&record.Guid,
 			&record.Pod,
@@ -148,7 +146,7 @@ func (db *SQLDB) scanRecord(rows *sql.Rows) ([]*queue.AsyncCallRecord, error) {
 			return nil, err
 		}
 
-		result = append(result, record)
+		result = append(result, &record)
 	}
 	if rows.Err() != nil {
 		return nil, rows.Err()

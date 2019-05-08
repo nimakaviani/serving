@@ -27,7 +27,7 @@ func (h *sqlHelper) Upsert(
 	rowsAffected, err := res.RowsAffected()
 	if err != nil {
 		// this should never happen
-		log.Printf("failed-getting-rows-affected", err.Error())
+		log.Printf("failed-getting-rows-affected %s", err.Error())
 		return false, err
 	}
 

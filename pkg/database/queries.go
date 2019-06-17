@@ -23,7 +23,7 @@ var (
 	}
 )
 
-func (db *SQLDB) CreateAsyncTable() error {
+func (db *PostgresSQLDB) CreateAsyncTable() error {
 	_, err := db.db.Exec(`
 		CREATE TABLE IF NOT EXISTS async_table(
 			guid VARCHAR(255) PRIMARY KEY,
@@ -40,7 +40,7 @@ func (db *SQLDB) CreateAsyncTable() error {
 	return nil
 }
 
-func (db *SQLDB) CreateAsyncReq(guid, pod string) error {
+func (db *PostgresSQLDB) CreateAsyncReq(guid, pod string) error {
 	err := db.transact(func(tx Tx) error {
 		_, err := db.insert(tx, AsyncTable,
 			SQLAttributes{
@@ -60,7 +60,7 @@ func (db *SQLDB) CreateAsyncReq(guid, pod string) error {
 	return nil
 }
 
-func (db *SQLDB) UpdateAsyncReq(guid string, status queue.Status, body []byte, statusCode int) error {
+func (db *PostgresSQLDB) UpdateAsyncReq(guid string, status queue.Status, body []byte, statusCode int) error {
 	err := db.transact(func(tx Tx) error {
 		_, err := db.update(tx, AsyncTable, SQLAttributes{
 			"status":      status,
@@ -82,7 +82,7 @@ func (db *SQLDB) UpdateAsyncReq(guid string, status queue.Status, body []byte, s
 	return nil
 }
 
-func (db *SQLDB) FetchRecord(guid string) (*queue.AsyncCallRecord, error) {
+func (db *PostgresSQLDB) FetchRecord(guid string) (*queue.AsyncCallRecord, error) {
 	var records []*queue.AsyncCallRecord
 
 	err := db.transact(func(tx Tx) error {
@@ -110,7 +110,7 @@ func (db *SQLDB) FetchRecord(guid string) (*queue.AsyncCallRecord, error) {
 	return records[0], nil
 }
 
-func (db *SQLDB) DeleteRecord(guid string) error {
+func (db *PostgresSQLDB) DeleteRecord(guid string) error {
 	err := db.transact(func(tx Tx) error {
 		_, err := db.delete(
 			tx,
@@ -132,7 +132,7 @@ func (db *SQLDB) DeleteRecord(guid string) error {
 	return nil
 }
 
-func (db *SQLDB) scanRecord(rows *sql.Rows) ([]*queue.AsyncCallRecord, error) {
+func (db *PostgresSQLDB) scanRecord(rows *sql.Rows) ([]*queue.AsyncCallRecord, error) {
 	result := []*queue.AsyncCallRecord{}
 
 	for rows.Next() {
@@ -159,37 +159,37 @@ func (db *SQLDB) scanRecord(rows *sql.Rows) ([]*queue.AsyncCallRecord, error) {
 	return result, nil
 }
 
-func (db *SQLDB) one(q Queryable, table string,
+func (db *PostgresSQLDB) one(q Queryable, table string,
 	columns ColumnList, lockRow RowLock,
 	wheres string, whereBindings ...interface{},
 ) RowScanner {
 	return db.helper.One(q, table, columns, lockRow, wheres, whereBindings...)
 }
 
-func (db *SQLDB) all(q Queryable, table string,
+func (db *PostgresSQLDB) all(q Queryable, table string,
 	columns ColumnList, lockRow RowLock,
 	wheres string, whereBindings ...interface{},
 ) (*sql.Rows, error) {
 	return db.helper.All(q, table, columns, lockRow, wheres, whereBindings...)
 }
 
-func (db *SQLDB) upsert(q Queryable, table string, attributes SQLAttributes, wheres string, whereBindings ...interface{}) (bool, error) {
+func (db *PostgresSQLDB) upsert(q Queryable, table string, attributes SQLAttributes, wheres string, whereBindings ...interface{}) (bool, error) {
 	return db.helper.Upsert(q, table, attributes, wheres, whereBindings...)
 }
 
-func (db *SQLDB) insert(q Queryable, table string, attributes SQLAttributes) (sql.Result, error) {
+func (db *PostgresSQLDB) insert(q Queryable, table string, attributes SQLAttributes) (sql.Result, error) {
 	return db.helper.Insert(q, table, attributes)
 }
 
-func (db *SQLDB) update(q Queryable, table string, updates SQLAttributes, wheres string, whereBindings ...interface{}) (sql.Result, error) {
+func (db *PostgresSQLDB) update(q Queryable, table string, updates SQLAttributes, wheres string, whereBindings ...interface{}) (sql.Result, error) {
 	return db.helper.Update(q, table, updates, wheres, whereBindings...)
 }
 
-func (db *SQLDB) delete(q Queryable, table string, wheres string, whereBindings ...interface{}) (sql.Result, error) {
+func (db *PostgresSQLDB) delete(q Queryable, table string, wheres string, whereBindings ...interface{}) (sql.Result, error) {
 	return db.helper.Delete(q, table, wheres, whereBindings...)
 }
 
-func (db *SQLDB) transact(f func(tx Tx) error) error {
+func (db *PostgresSQLDB) transact(f func(tx Tx) error) error {
 	err := db.helper.Transact(db.db, f)
 	if err != nil {
 		return err

@@ -1,6 +1,10 @@
 package database
 
-type SQLDB struct {
+import (
+	"github.com/knative/serving/pkg/queue"
+)
+
+type PostgresSQLDB struct {
 	db     QueryableDB
 	flavor string
 	helper SQLHelper
@@ -9,9 +13,9 @@ type SQLDB struct {
 func NewSQLDB(
 	db QueryableDB,
 	flavor string,
-) *SQLDB {
+) queue.SQLDB {
 	helper := NewSQLHelper(flavor)
-	return &SQLDB{
+	return &PostgresSQLDB{
 		db:     db,
 		flavor: flavor,
 		helper: helper,

@@ -9,7 +9,16 @@ type Status int
 const (
 	InProgress Status = iota
 	Ready
+	Failed
 )
+
+type SQLDB interface {
+	CreateAsyncTable() error
+	CreateAsyncReq(guid, podId string) error
+	UpdateAsyncReq(guid string, status Status, data []byte, statusCode int) error
+	FetchRecord(guid string) (*AsyncCallRecord, error)
+	DeleteRecord(guid string) error
+}
 
 type AsyncCallRecord struct {
 	Guid       string

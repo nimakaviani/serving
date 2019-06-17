@@ -98,7 +98,7 @@ var (
 
 	databaseConnectionString string
 	databaseDriver           string
-	sqlDB                    *database.SQLDB
+	sqlDB                    queue.SQLDB
 	sqlConn                  *sql.DB
 
 	asyncCallCache       map[string]*queue.AsyncCallRecord
@@ -213,7 +213,7 @@ func probeUserContainer() bool {
 }
 
 // Make handler a closure for testing.
-func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2cProxy *httputil.ReverseProxy, sqlDB *database.SQLDB) func(http.ResponseWriter, *http.Request) {
+func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2cProxy *httputil.ReverseProxy, sqlDB queue.SQLDB) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		proxy := httpProxy
 		if r.ProtoMajor == 2 {
@@ -288,7 +288,7 @@ func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, httpProxy, h2c
 	}
 }
 
-func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.ReverseProxy, sqlDB *database.SQLDB, asyncReq bool, doneChan chan struct{}) {
+func handleRequest(w http.ResponseWriter, r *http.Request, proxy *httputil.ReverseProxy, sqlDB queue.SQLDB, asyncReq bool, doneChan chan struct{}) {
 	logger.Infof("handle request - asyncReq: %t - allowAsync: %t - inflight: %d", asyncReq, allowAsync, activeAsyncCallCount)
 
 	if !asyncReq {

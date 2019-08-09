@@ -18,6 +18,7 @@ package v1
 
 import (
 	"context"
+	"log"
 
 	corev1 "k8s.io/api/core/v1"
 	"knative.dev/pkg/apis"
@@ -39,6 +40,7 @@ func (rts *RevisionTemplateSpec) SetDefaults(ctx context.Context) {
 func (rs *RevisionSpec) SetDefaults(ctx context.Context) {
 	cfg := config.FromContextOrDefaults(ctx)
 
+	log.Println(">> timeout", cfg.Defaults.RevisionTimeoutSeconds)
 	// Default TimeoutSeconds based on our configmap
 	if rs.TimeoutSeconds == nil || *rs.TimeoutSeconds == 0 {
 		rs.TimeoutSeconds = ptr.Int64(cfg.Defaults.RevisionTimeoutSeconds)
@@ -81,9 +83,25 @@ func (rs *RevisionSpec) SetDefaults(ctx context.Context) {
 				rs.PodSpec.Containers[idx].Resources.Limits[corev1.ResourceMemory] = *rsrc
 			}
 		}
+
+		vms := rs.PodSpec.Containers[idx].VolumeMounts
+		for i := range vms {
+			vms[i].ReadOnly = true
+		}
+
+		log.Println(">> default probe", cfg.Defaults.DisableDefaultReadinessOnDeploy)
+		log.Printf(">> readinessProbe %#v", rs.PodSpec.Containers[idx].ReadinessProbe)
+		// do not set the default readiness probe if default probing is disabled
+		if rs.PodSpec.Containers[idx].ReadinessProbe == nil && cfg.Defaults.DisableDefaultReadinessOnDeploy {
+			return
+		}
+
+		log.Println(">> shouldnt get here")
+
 		if rs.PodSpec.Containers[idx].ReadinessProbe == nil {
 			rs.PodSpec.Containers[idx].ReadinessProbe = &corev1.Probe{}
 		}
+
 		if rs.PodSpec.Containers[idx].ReadinessProbe.TCPSocket == nil &&
 			rs.PodSpec.Containers[idx].ReadinessProbe.HTTPGet == nil &&
 			rs.PodSpec.Containers[idx].ReadinessProbe.Exec == nil {
@@ -92,11 +110,6 @@ func (rs *RevisionSpec) SetDefaults(ctx context.Context) {
 
 		if rs.PodSpec.Containers[idx].ReadinessProbe.SuccessThreshold == 0 {
 			rs.PodSpec.Containers[idx].ReadinessProbe.SuccessThreshold = 1
-		}
-
-		vms := rs.PodSpec.Containers[idx].VolumeMounts
-		for i := range vms {
-			vms[i].ReadOnly = true
 		}
 	}
 }

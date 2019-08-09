@@ -973,6 +973,25 @@ func TestMakeDeployment(t *testing.T) {
 			deploy.ObjectMeta.Annotations[IstioOutboundIPRangeAnnotation] = "10.4.0.0/14,10.7.240.0/20"
 			deploy.Spec.Template.ObjectMeta.Annotations[IstioOutboundIPRangeAnnotation] = "10.4.0.0/14,10.7.240.0/20"
 		}),
+	}, {
+		name: "with default readiness disabled on deploy",
+		rev: revision(
+			withoutLabels,
+			func(revision *v1alpha1.Revision) {
+				container(revision.Spec.GetContainer(),
+					withReadinessProbe(corev1.Handler{}),
+				)
+			},
+		),
+		lc: &logging.Config{},
+		tc: &tracingconfig.Config{},
+		nc: &network.Config{},
+		oc: &metrics.ObservabilityConfig{},
+		ac: &autoscaler.Config{DisableDefaultReadinessOnDeploy: true},
+		cc: &deployment.Config{},
+		want: makeDeployment(func(deploy *appsv1.Deployment) {
+			deploy.Spec.Replicas = ptr.Int32(0)
+		}),
 	}}
 
 	for _, test := range tests {
@@ -980,7 +999,7 @@ func TestMakeDeployment(t *testing.T) {
 			// Tested above so that we can rely on it here for brevity.
 			podSpec, err := makePodSpec(test.rev, test.lc, test.tc, test.oc, test.ac, test.cc)
 			if err != nil {
-				t.Fatal("makePodSpec returned errror")
+				t.Fatalf("makePodSpec returned errror %v", err)
 			}
 			test.want.Spec.Template.Spec = *podSpec
 			got, err := MakeDeployment(test.rev, test.lc, test.tc, test.nc, test.oc, test.ac, test.cc)

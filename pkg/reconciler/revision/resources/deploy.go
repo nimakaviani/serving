@@ -18,8 +18,10 @@ package resources
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 
+	"github.com/pkg/errors"
 	"knative.dev/pkg/kmeta"
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/ptr"
@@ -27,6 +29,7 @@ import (
 	"knative.dev/serving/pkg/apis/networking"
 	"knative.dev/serving/pkg/apis/serving"
 	"knative.dev/serving/pkg/apis/serving/v1alpha1"
+	"knative.dev/serving/pkg/autoscaler"
 	"knative.dev/serving/pkg/deployment"
 	"knative.dev/serving/pkg/metrics"
 	"knative.dev/serving/pkg/network"
@@ -108,13 +111,7 @@ func rewriteUserProbe(p *corev1.Probe, userPort int) {
 	}
 }
 
-func makePodSpec(rev *v1alpha1.Revision, loggingConfig *logging.Config, tracingConfig *tracingconfig.Config, observabilityConfig *metrics.ObservabilityConfig, deploymentConfig *deployment.Config) (*corev1.PodSpec, error) {
-	queueContainer, err := makeQueueContainer(rev, loggingConfig, tracingConfig, observabilityConfig, deploymentConfig)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to create queue-proxy container: %w", err)
-	}
-
+func makePodSpec(rev *v1alpha1.Revision, loggingConfig *logging.Config, tracingConfig *tracingconfig.Config, observabilityConfig *metrics.ObservabilityConfig, autoscalerConfig *autoscaler.Config, deploymentConfig *deployment.Config) (*corev1.PodSpec, error) {
 	userContainer := rev.Spec.GetContainer().DeepCopy()
 	// Adding or removing an overwritten corev1.Container field here? Don't forget to
 	// update the fieldmasks / validations in pkg/apis/serving
@@ -141,8 +138,27 @@ func makePodSpec(rev *v1alpha1.Revision, loggingConfig *logging.Config, tracingC
 		userContainer.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
 	}
 
+	// reset the readiness probe to defailt if userContainer.ReadinessProbe is nil
+	if userContainer.ReadinessProbe == nil {
+		container := rev.Spec.GetContainer()
+		container.ReadinessProbe = &corev1.Probe{}
+		container.ReadinessProbe.TCPSocket = &corev1.TCPSocketAction{}
+	}
+
+	queueContainer, err := makeQueueContainer(rev, loggingConfig, tracingConfig, observabilityConfig, autoscalerConfig, deploymentConfig)
+
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create queue-proxy container")
+	}
+
 	if userContainer.ReadinessProbe != nil {
 		if userContainer.ReadinessProbe.HTTPGet != nil || userContainer.ReadinessProbe.TCPSocket != nil {
+
+			// error if the readiness check is disabled
+			if autoscalerConfig != nil && autoscalerConfig.DisableDefaultReadinessOnDeploy {
+				return nil, errors.Wrap(err, "user-provided readiness probe will be ignored in with enable-default-readiness-on-deploy set")
+			}
+
 			// HTTP and TCP ReadinessProbes are executed by the queue-proxy directly against the
 			// user-container instead of via kubelet.
 			userContainer.ReadinessProbe = nil
@@ -205,6 +221,8 @@ func MakeDeployment(rev *v1alpha1.Revision,
 		return k == serving.RevisionLastPinnedAnnotationKey
 	})
 
+	log.Println(">> deploy rev", *rev.Spec.TimeoutSeconds)
+
 	// TODO(nghia): Remove the need for this
 	// Only force-set the inject annotation if the revision does not state otherwise.
 	if _, ok := podTemplateAnnotations[sidecarIstioInjectAnnotation]; !ok {
@@ -232,6 +250,11 @@ func MakeDeployment(rev *v1alpha1.Revision,
 		return nil, fmt.Errorf("failed to create PodSpec: %w", err)
 	}
 
+	replicaCount := ptr.Int32(1)
+	if autoscalerConfig.DisableDefaultReadinessOnDeploy {
+		replicaCount = ptr.Int32(0)
+	}
+
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      names.Deployment(rev),
@@ -244,7 +267,7 @@ func MakeDeployment(rev *v1alpha1.Revision,
 			OwnerReferences: []metav1.OwnerReference{*kmeta.NewControllerRef(rev)},
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas:                ptr.Int32(1),
+			Replicas:                replicaCount,
 			Selector:                makeSelector(rev),
 			ProgressDeadlineSeconds: ptr.Int32(ProgressDeadlineSeconds),
 			Template: corev1.PodTemplateSpec{

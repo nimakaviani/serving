@@ -19,6 +19,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"reflect"
 	"time"
 
@@ -134,8 +135,15 @@ func (c *Reconciler) reconcile(ctx context.Context, service *v1alpha1.Service) e
 	// and may not have had all of the assumed defaults specified.  This won't result
 	// in this getting written back to the API Server, but lets downstream logic make
 	// assumptions about defaulting.
+	log.Println(">> service default")
+	nilReadiness := service.Spec.GetTemplate().Spec.GetContainer().ReadinessProbe == nil
+	log.Println(">> nil readiness", nilReadiness)
 	service.SetDefaults(v1.WithUpgradeViaDefaulting(ctx))
+	if nilReadiness {
+		service.Spec.GetTemplate().Spec.GetContainer().ReadinessProbe = nil
+	}
 	service.Status.InitializeConditions()
+	// log.Printf(">> Service After probe: %#v \n", *service.Spec.GetTemplate().Spec.GetContainer().ReadinessProbe)
 
 	if err := service.ConvertUp(ctx, &v1beta1.Service{}); err != nil {
 		if ce, ok := err.(*v1alpha1.CannotConvertError); ok {

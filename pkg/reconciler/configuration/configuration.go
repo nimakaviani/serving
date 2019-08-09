@@ -19,6 +19,7 @@ package configuration
 import (
 	"context"
 	"fmt"
+	"log"
 	"reflect"
 
 	"go.uber.org/zap"
@@ -116,8 +117,13 @@ func (c *Reconciler) reconcile(ctx context.Context, config *v1alpha1.Configurati
 	// and may not have had all of the assumed defaults specified.  This won't result
 	// in this getting written back to the API Server, but lets downstream logic make
 	// assumptions about defaulting.
+	log.Println(">> config default")
+	nilReadiness := config.Spec.GetTemplate().Spec.GetContainer().ReadinessProbe == nil
 	config.SetDefaults(v1.WithUpgradeViaDefaulting(ctx))
 	config.Status.InitializeConditions()
+	if nilReadiness {
+		config.Spec.GetTemplate().Spec.GetContainer().ReadinessProbe = nil
+	}
 
 	if err := config.ConvertUp(ctx, &v1beta1.Configuration{}); err != nil {
 		if ce, ok := err.(*v1alpha1.CannotConvertError); ok {

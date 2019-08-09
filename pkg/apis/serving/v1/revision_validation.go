@@ -24,6 +24,7 @@ import (
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/kmp"
 	"knative.dev/serving/pkg/apis/autoscaling"
+	"knative.dev/serving/pkg/apis/config"
 	"knative.dev/serving/pkg/apis/serving"
 )
 
@@ -111,7 +112,8 @@ func (current *RevisionTemplateSpec) VerifyNameChange(ctx context.Context, og Re
 
 // Validate implements apis.Validatable
 func (rs *RevisionSpec) Validate(ctx context.Context) *apis.FieldError {
-	errs := serving.ValidatePodSpec(rs.PodSpec)
+	cfg := config.FromContextOrDefaults(ctx)
+	errs := serving.ValidatePodSpec(rs.PodSpec, cfg.Defaults.DisableDefaultReadinessOnDeploy)
 
 	if rs.TimeoutSeconds != nil {
 		errs = errs.Also(serving.ValidateTimeoutSeconds(ctx, *rs.TimeoutSeconds))

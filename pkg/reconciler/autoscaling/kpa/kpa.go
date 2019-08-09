@@ -190,7 +190,7 @@ func (c *Reconciler) reconcile(ctx context.Context, pa *pav1alpha1.PodAutoscaler
 		return fmt.Errorf("error reporting metrics: %w", err)
 	}
 
-	computeActiveCondition(pa, want, got)
+	computeActiveCondition(ctx, pa, want, got)
 
 	pa.Status.ObservedGeneration = pa.Generation
 	return nil
@@ -253,8 +253,10 @@ func reportMetrics(pa *pav1alpha1.PodAutoscaler, want int32, got int) error {
 //    | -1   | >= min | inactive   | inactive   |
 //    | -1   | >= min | activating | active     |
 //    | -1   | >= min | active     | active     |
-func computeActiveCondition(pa *pav1alpha1.PodAutoscaler, want int32, got int) {
-	minReady := activeThreshold(pa)
+func computeActiveCondition(ctx context.Context, pa *pav1alpha1.PodAutoscaler, want int32, got int) {
+	cfg := config.FromContext(ctx).Autoscaler
+
+	minReady := activeThreshold(pa, cfg.DisableDefaultReadinessOnDeploy)
 
 	switch {
 	case want == 0:
@@ -280,9 +282,9 @@ func computeActiveCondition(pa *pav1alpha1.PodAutoscaler, want int32, got int) {
 }
 
 // activeThreshold returns the scale required for the pa to be marked Active
-func activeThreshold(pa *pav1alpha1.PodAutoscaler) int {
+func activeThreshold(pa *pav1alpha1.PodAutoscaler, disableDefaultScaleOne bool) int {
 	min, _ := pa.ScaleBounds()
-	if min < 1 {
+	if min < 1 && !disableDefaultScaleOne {
 		min = 1
 	}
 

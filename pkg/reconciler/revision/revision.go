@@ -18,6 +18,7 @@ package revision
 
 import (
 	"context"
+	"log"
 	"reflect"
 	"strings"
 
@@ -161,7 +162,14 @@ func (c *Reconciler) reconcile(ctx context.Context, rev *v1alpha1.Revision) erro
 	// and may not have had all of the assumed defaults specified.  This won't result
 	// in this getting written back to the API Server, but lets downstream logic make
 	// assumptions about defaulting.
+	log.Printf(">> Prior probe: %#v \n", *rev.Spec.GetContainer())
+	nilReadiness := rev.Spec.GetContainer().ReadinessProbe == nil
+	log.Println(">> nil readiness", nilReadiness)
 	rev.SetDefaults(v1.WithUpgradeViaDefaulting(ctx))
+	if nilReadiness {
+		rev.Spec.GetContainer().ReadinessProbe = nil
+	}
+	log.Printf(">> After probe: %#v \n", *rev.Spec.GetContainer())
 
 	rev.Status.InitializeConditions()
 	c.updateRevisionLoggingURL(ctx, rev)
@@ -192,6 +200,7 @@ func (c *Reconciler) reconcile(ctx context.Context, rev *v1alpha1.Revision) erro
 	}}
 
 	for _, phase := range phases {
+		log.Printf(">> phase: %s - %d", phase.name, *rev.Spec.TimeoutSeconds)
 		if err := phase.f(ctx, rev); err != nil {
 			return err
 		}

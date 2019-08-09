@@ -25,6 +25,7 @@ import (
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/kmp"
 	"knative.dev/serving/pkg/apis/autoscaling"
+	"knative.dev/serving/pkg/apis/config"
 	"knative.dev/serving/pkg/apis/serving"
 )
 
@@ -117,6 +118,7 @@ func (current *RevisionTemplateSpec) VerifyNameChange(ctx context.Context, og *R
 
 // Validate ensures RevisionSpec is properly configured.
 func (rs *RevisionSpec) Validate(ctx context.Context) *apis.FieldError {
+	cfg := config.FromContextOrDefaults(ctx)
 	if equality.Semantic.DeepEqual(rs, &RevisionSpec{}) {
 		return apis.ErrMissingField(apis.CurrentField)
 	}
@@ -134,7 +136,7 @@ func (rs *RevisionSpec) Validate(ctx context.Context) *apis.FieldError {
 			errs = errs.Also(err.ViaField("volumes"))
 		}
 		errs = errs.Also(serving.ValidateContainer(
-			*rs.DeprecatedContainer, volumes).ViaField("container"))
+			*rs.DeprecatedContainer, volumes, cfg.Defaults.DisableDefaultReadinessOnDeploy).ViaField("container"))
 	default:
 		errs = errs.Also(apis.ErrMissingOneOf("container", "containers"))
 	}

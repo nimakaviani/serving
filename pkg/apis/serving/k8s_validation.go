@@ -236,7 +236,7 @@ func validateEnvFrom(envFromList []corev1.EnvFromSource) *apis.FieldError {
 	return errs
 }
 
-func ValidatePodSpec(ps corev1.PodSpec) *apis.FieldError {
+func ValidatePodSpec(ps corev1.PodSpec, disableDefaultReadinessOnDeploy bool) *apis.FieldError {
 	// This is inlined, and so it makes for a less meaningful
 	// error message.
 	// if equality.Semantic.DeepEqual(ps, corev1.PodSpec{}) {
@@ -254,7 +254,7 @@ func ValidatePodSpec(ps corev1.PodSpec) *apis.FieldError {
 	case 0:
 		errs = errs.Also(apis.ErrMissingField("containers"))
 	case 1:
-		errs = errs.Also(ValidateContainer(ps.Containers[0], volumes).
+		errs = errs.Also(ValidateContainer(ps.Containers[0], volumes, disableDefaultReadinessOnDeploy).
 			ViaFieldIndex("containers", 0))
 	default:
 		errs = errs.Also(apis.ErrMultipleOneOf("containers"))
@@ -267,7 +267,7 @@ func ValidatePodSpec(ps corev1.PodSpec) *apis.FieldError {
 	return errs
 }
 
-func ValidateContainer(container corev1.Container, volumes sets.String) *apis.FieldError {
+func ValidateContainer(container corev1.Container, volumes sets.String, disableDefaultReadinessOnDeploy bool) *apis.FieldError {
 	if equality.Semantic.DeepEqual(container, corev1.Container{}) {
 		return apis.ErrMissingField(apis.CurrentField)
 	}
@@ -297,11 +297,11 @@ func ValidateContainer(container corev1.Container, volumes sets.String) *apis.Fi
 		errs = errs.Also(fe)
 	}
 	// Liveness Probes
-	errs = errs.Also(validateProbe(container.LivenessProbe).ViaField("livenessProbe"))
+	errs = errs.Also(validateProbe(container.LivenessProbe, false).ViaField("livenessProbe"))
 	// Ports
 	errs = errs.Also(validateContainerPorts(container.Ports).ViaField("ports"))
 	// Readiness Probes
-	errs = errs.Also(validateReadinessProbe(container.ReadinessProbe).ViaField("readinessProbe"))
+	errs = errs.Also(validateReadinessProbe(container.ReadinessProbe, disableDefaultReadinessOnDeploy).ViaField("readinessProbe"))
 	// Resources
 	errs = errs.Also(validateResources(&container.Resources).ViaField("resources"))
 	// SecurityContext
@@ -440,12 +440,12 @@ func validateContainerPorts(ports []corev1.ContainerPort) *apis.FieldError {
 	return errs
 }
 
-func validateReadinessProbe(p *corev1.Probe) *apis.FieldError {
+func validateReadinessProbe(p *corev1.Probe, disableDefaultReadinessOnDeploy bool) *apis.FieldError {
 	if p == nil {
 		return nil
 	}
 
-	errs := validateProbe(p)
+	errs := validateProbe(p, disableDefaultReadinessOnDeploy)
 
 	if p.PeriodSeconds < 0 {
 		errs = errs.Also(apis.ErrOutOfBoundsValue(p.PeriodSeconds, 0, math.MaxInt32, "periodSeconds"))
@@ -487,7 +487,7 @@ func validateReadinessProbe(p *corev1.Probe) *apis.FieldError {
 	return errs
 }
 
-func validateProbe(p *corev1.Probe) *apis.FieldError {
+func validateProbe(p *corev1.Probe, disableDefaultReadinessOnDeploy bool) *apis.FieldError {
 	if p == nil {
 		return nil
 	}
@@ -509,6 +509,10 @@ func validateProbe(p *corev1.Probe) *apis.FieldError {
 	if h.Exec != nil {
 		handlers = append(handlers, "exec")
 		errs = errs.Also(apis.CheckDisallowedFields(*h.Exec, *ExecActionMask(h.Exec))).ViaField("exec")
+	}
+
+	if disableDefaultReadinessOnDeploy {
+		return nil
 	}
 
 	if len(handlers) == 0 {

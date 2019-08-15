@@ -27,6 +27,7 @@ import (
 	"knative.dev/pkg/injection/sharedmain"
 
 	"go.uber.org/zap"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/logging"
@@ -41,6 +42,10 @@ import (
 	net "knative.dev/serving/pkg/apis/networking/v1alpha1"
 	"knative.dev/serving/pkg/apis/serving/v1alpha1"
 	"knative.dev/serving/pkg/apis/serving/v1beta1"
+
+	// configmap validations
+	routeconfig "knative.dev/serving/pkg/reconciler/route/config"
+	revisionconfig "knative.dev/serving/pkg/reconciler/revision/config"
 )
 
 const (
@@ -120,10 +125,19 @@ func main() {
 		net.SchemeGroupVersion.WithKind("ClusterIngress"):                &net.ClusterIngress{},
 		net.SchemeGroupVersion.WithKind("Ingress"):                       &net.Ingress{},
 		net.SchemeGroupVersion.WithKind("ServerlessService"):             &net.ServerlessService{},
+		corev1.SchemeGroupVersion.WithKind("ConfigMap"):                  &webhook.ValidatableConfig{},
+	}
+
+	cfgValidator := &webhook.ConfigValidator{
+		RegisteredValidations: []*webhook.ConfigValidation {
+			routeconfig.NewConfigValidation(logger),
+			revisionconfig.NewConfigValidation(logger),
+		},
 	}
 
 	// Decorate contexts with the current state of the config.
 	ctxFunc := func(ctx context.Context) context.Context {
+		ctx = webhook.ToContext(ctx, cfgValidator)
 		return v1beta1.WithUpgradeViaDefaulting(store.ToContext(ctx))
 	}
 

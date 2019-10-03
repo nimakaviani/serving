@@ -228,7 +228,9 @@ func main() {
 	var ah http.Handler = activatorhandler.New(
 		ctx,
 		throttler,
-		reporter)
+		reporter,
+		kubeClient,
+	)
 	ah = activatorhandler.NewRequestEventHandler(reqCh, ah)
 	ah = tracing.HTTPSpanMiddleware(ah)
 	ah = configStore.HTTPMiddleware(ah)

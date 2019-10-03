@@ -67,6 +67,10 @@ func (cfg *Config) Equals(other *Config) bool {
 	return reflect.DeepEqual(other, cfg)
 }
 
+func (cfg *Config) DoKubeResourceTracing() bool {
+	return cfg.Backend != None && cfg.KubeResourceTracing
+}
+
 // NewTracingConfigFromMap returns a Config given a map corresponding to a ConfigMap
 func NewTracingConfigFromMap(cfgMap map[string]string) (*Config, error) {
 	tc := Config{

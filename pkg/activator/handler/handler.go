@@ -27,8 +27,10 @@ import (
 	"go.opencensus.io/trace"
 	"go.uber.org/zap"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/logging/logkey"
+	"knative.dev/pkg/tracing"
 	tracingconfig "knative.dev/pkg/tracing/config"
 	"knative.dev/serving/pkg/activator"
 	activatorconfig "knative.dev/serving/pkg/activator/config"
@@ -43,6 +45,7 @@ import (
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 )
 
 // Throttler is the interface that Handler calls to Try to proxy the user request.
@@ -53,10 +56,11 @@ type Throttler interface {
 // activationHandler will wait for an active endpoint for a revision
 // to be available before proxing the request
 type activationHandler struct {
-	logger    *zap.SugaredLogger
-	transport http.RoundTripper
-	reporter  activator.StatsReporter
-	throttler Throttler
+	logger     *zap.SugaredLogger
+	transport  http.RoundTripper
+	reporter   activator.StatsReporter
+	throttler  Throttler
+	kubeClient kubernetes.Interface
 
 	revisionLister servinglisters.RevisionLister
 }
@@ -65,13 +69,14 @@ type activationHandler struct {
 const defaulTimeout = 2 * time.Minute
 
 // New constructs a new http.Handler that deals with revision activation.
-func New(ctx context.Context, t Throttler, sr activator.StatsReporter) http.Handler {
+func New(ctx context.Context, t Throttler, sr activator.StatsReporter, kubeClient kubernetes.Interface) http.Handler {
 	return &activationHandler{
 		logger:         logging.FromContext(ctx),
 		transport:      network.AutoTransport,
 		reporter:       sr,
 		throttler:      t,
 		revisionLister: revisioninformer.Get(ctx).Lister(),
+		kubeClient:     kubeClient,
 	}
 }
 
@@ -91,6 +96,23 @@ func (a *activationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tryContext, trySpan := trace.StartSpan(r.Context(), "throttler_try")
 	tryContext, cancel := context.WithTimeout(tryContext, defaulTimeout)
 	defer cancel()
+
+	// Setup k8s resource tracking if configured and our span is sampled
+	config := activatorconfig.FromContext(r.Context())
+	if config.Tracing.DoKubeResourceTracing() && trySpan.SpanContext().IsSampled() {
+		lo := metav1.ListOptions{LabelSelector: fmt.Sprintf("app=%s", name)}
+		watch, err := a.kubeClient.CoreV1().Pods(namespace).Watch(lo)
+		if err != nil {
+			logger.Errorw("Failed to set up pod watch for tracing", zap.Error(err))
+		} else {
+			defer watch.Stop()
+
+			stopCh := make(chan struct{})
+			defer close(stopCh)
+
+			go tracing.TracePodStartup(tryContext, stopCh, watch.ResultChan())
+		}
+	}
 
 	err = a.throttler.Try(tryContext, revID, func(dest string) error {
 		trySpan.End()

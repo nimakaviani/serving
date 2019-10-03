@@ -21,6 +21,9 @@ metadata:
     serving.knative.dev/release: devel
 
 data:
+  backend: "zipkin"
+  zipkin-endpoint: "http://zipkin.istio-system.svc.cluster.local:9411/api/v2/spans"
+  debug: "true"
   _example: |
     ################################
     #                              #

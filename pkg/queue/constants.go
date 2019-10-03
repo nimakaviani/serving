@@ -26,4 +26,5 @@ const (
 	// Main usage is to delay the termination of user-container until all
 	// accepted requests have been processed.
 	RequestQueueDrainPath = "/wait-for-drain"
+	RequestQueueHaltPath  = "/halt"
 )

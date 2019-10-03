@@ -127,6 +127,12 @@ func (h *State) DrainHandlerFunc() func(_ http.ResponseWriter, _ *http.Request) 
 	}
 }
 
+func (h *State) HaltHandlerFunc() func(_ http.ResponseWriter, _ *http.Request) {
+	return func(_ http.ResponseWriter, _ *http.Request) {
+		h.shutdown()
+	}
+}
+
 // Shutdown marks the proxy server as no ready and begins its shutdown process. This
 // results in unblocking any connections waiting for drain.
 func (h *State) Shutdown(drain func()) {

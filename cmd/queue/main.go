@@ -529,6 +529,7 @@ func supportsMetrics(env config, logger *zap.SugaredLogger) bool {
 func buildAdminServer(healthState *health.State) *http.Server {
 	adminMux := http.NewServeMux()
 	adminMux.HandleFunc(queue.RequestQueueDrainPath, healthState.DrainHandlerFunc())
+	adminMux.HandleFunc(queue.RequestQueueHaltPath, healthState.HaltHandlerFunc())
 
 	return &http.Server{
 		Addr:    ":" + strconv.Itoa(networking.QueueAdminPort),

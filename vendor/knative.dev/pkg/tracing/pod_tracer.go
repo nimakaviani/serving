@@ -38,16 +38,24 @@ type containerTrace struct {
 // TracePodStartup creates spans detailing the startup process of the pod who's events arrive over eventCh
 func TracePodStartup(ctx context.Context, stopCh <-chan struct{}, eventCh <-chan watch.Event) (*trace.Span, error) {
 	var (
-		podCreating    *trace.Span
-		podCreatingCtx context.Context
-		podState       containerState
+		podCreating, prePodSpan *trace.Span
+		podCreatingCtx          context.Context
+		podState                containerState
+		prePodTracingClosed     bool
 	)
 	initContainerSpans := make(map[string]*containerTrace)
 	containerSpans := make(map[string]*containerTrace)
 
+	_, prePodSpan = trace.StartSpan(ctx, "pre_pod_creation")
+
 	for {
 		select {
 		case ev := <-eventCh:
+			if !prePodTracingClosed {
+				prePodTracingClosed = true
+				prePodSpan.End()
+			}
+
 			if pod, ok := ev.Object.(*corev1.Pod); ok {
 				if podState == "" {
 					podCreatingCtx, podCreating = trace.StartSpan(ctx, "pod_creating")

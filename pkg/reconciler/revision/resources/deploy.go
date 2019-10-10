@@ -199,7 +199,7 @@ func buildUserPortEnv(userPort string) corev1.EnvVar {
 // MakeDeployment constructs a K8s Deployment resource from a revision.
 func MakeDeployment(rev *v1alpha1.Revision,
 	loggingConfig *logging.Config, tracingConfig *tracingconfig.Config, networkConfig *network.Config, observabilityConfig *metrics.ObservabilityConfig,
-	deploymentConfig *deployment.Config) (*appsv1.Deployment, error) {
+	autoscalerConfig *autoscaler.Config, deploymentConfig *deployment.Config) (*appsv1.Deployment, error) {
 
 	podTemplateAnnotations := resources.FilterMap(rev.GetAnnotations(), func(k string) bool {
 		return k == serving.RevisionLastPinnedAnnotationKey
@@ -227,7 +227,7 @@ func MakeDeployment(rev *v1alpha1.Revision,
 			podTemplateAnnotations[IstioOutboundIPRangeAnnotation] = networkConfig.IstioOutboundIPRanges
 		}
 	}
-	podSpec, err := makePodSpec(rev, loggingConfig, tracingConfig, observabilityConfig, deploymentConfig)
+	podSpec, err := makePodSpec(rev, loggingConfig, tracingConfig, observabilityConfig, autoscalerConfig, deploymentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PodSpec: %w", err)
 	}

@@ -46,6 +46,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 )
@@ -68,11 +69,16 @@ type testContext struct {
 	metric            string
 }
 
-func getVegetaTarget(kubeClientset *kubernetes.Clientset, domain, endpointOverride string, resolvable bool) (vegeta.Target, error) {
+func getVegetaTarget(kubeClientset *kubernetes.Clientset, domain, endpointOverride string, resolvable bool, sleep ...int64) (vegeta.Target, error) {
+	waitTime := int64(100)
+	if len(sleep) > 0 {
+		waitTime = sleep[0]
+	}
+
 	if resolvable {
 		return vegeta.Target{
 			Method: http.MethodGet,
-			URL:    fmt.Sprintf("http://%s?sleep=100", domain),
+			URL:    fmt.Sprintf("http://%s?sleep=%d", domain, waitTime),
 		}, nil
 	}
 
@@ -91,7 +97,7 @@ func getVegetaTarget(kubeClientset *kubernetes.Clientset, domain, endpointOverri
 	h.Set("Host", domain)
 	return vegeta.Target{
 		Method: http.MethodGet,
-		URL:    fmt.Sprintf("http://%s?sleep=100", endpoint),
+		URL:    fmt.Sprintf("http://%s?sleep=%d", endpoint, waitTime),
 		Header: h,
 	}, nil
 }
@@ -101,10 +107,11 @@ func generateTraffic(
 	attacker *vegeta.Attacker,
 	pacer vegeta.Pacer,
 	duration time.Duration,
-	stopChan chan struct{}) error {
+	stopChan chan struct{},
+	sleep ...int64) error {
 
 	target, err := getVegetaTarget(
-		ctx.clients.KubeClient.Kube, ctx.resources.Route.Status.URL.URL().Hostname(), pkgTest.Flags.IngressEndpoint, test.ServingFlags.ResolvableDomain)
+		ctx.clients.KubeClient.Kube, ctx.resources.Route.Status.URL.URL().Hostname(), pkgTest.Flags.IngressEndpoint, test.ServingFlags.ResolvableDomain, sleep...)
 	if err != nil {
 		return fmt.Errorf("error creating vegeta target: %v", err)
 	}
@@ -154,12 +161,12 @@ func generateTrafficAtFixedConcurrency(ctx *testContext, concurrency int, durati
 	return generateTraffic(ctx, attacker, pacer, duration, stopChan)
 }
 
-func generateTrafficAtFixedRPS(ctx *testContext, rps int, duration time.Duration, stopChan chan struct{}) error {
+func generateTrafficAtFixedRPS(ctx *testContext, rps int, duration time.Duration, stopChan chan struct{}, sleep ...int64) error {
 	pacer := vegeta.ConstantPacer{Freq: rps, Per: time.Second}
 	attacker := vegeta.NewAttacker(vegeta.Timeout(duration))
 
 	ctx.t.Logf("Maintaining %v RPS requests for %v.", rps, duration)
-	return generateTraffic(ctx, attacker, pacer, duration, stopChan)
+	return generateTraffic(ctx, attacker, pacer, duration, stopChan, sleep...)
 }
 
 // setup creates a new service, with given service options.
@@ -247,6 +254,19 @@ func assertScaleDown(ctx *testContext) {
 	}
 
 	ctx.t.Log("Scaled down.")
+}
+
+func numberOfAllPods(ctx *testContext) (float64, error) {
+	labelSelector := metav1.LabelSelector{MatchLabels: map[string]string{serving.RevisionLabelKey: ctx.resources.Revision.Name}}
+	pods, err := ctx.clients.KubeClient.Kube.CoreV1().Pods(test.ServingNamespace).List(
+		metav1.ListOptions{
+			LabelSelector: labels.Set(labelSelector.MatchLabels).String(),
+		})
+	if err != nil {
+		return 0, fmt.Errorf("failed to get pods for revision %s: %w", ctx.resources.Revision.Name, err)
+	}
+
+	return float64(len(pods.Items)), nil
 }
 
 func numberOfPods(ctx *testContext) (float64, error) {
@@ -540,6 +560,58 @@ func TestTargetBurstCapacityMinusOne(t *testing.T) {
 	// Wait for the activator endpoints to equalize.
 	if err := waitForActivatorEndpoints(ctx.resources, ctx.clients); err != nil {
 		t.Fatalf("Never got Activator endpoints in the service: %v", err)
+	}
+}
+
+func TestInefficientScaleDown(t *testing.T) {
+	t.Log("starting the test")
+	// t.Parallel()
+	cancel := logstream.Start(t)
+	defer cancel()
+
+	ctx := setup(t, autoscaling.KPA, autoscaling.Concurrency, 1 /* containerConcurrency */, 1 /* targetUtilization */)
+	defer test.TearDown(ctx.clients, ctx.names)
+
+	t.Log("generating burst ...")
+	assertAutoscaleUpToNumPods(ctx, 1, 10, 60*time.Second, true)
+
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+
+	for i := 0; i < 5; i++ {
+		go func() {
+			err := generateTrafficAtFixedRPS(ctx, 1, 5*time.Second, stopCh, 300000 /* 5 minutes*/)
+			if err != nil {
+				t.Fatalf("failed %q", err)
+			}
+		}()
+	}
+
+	var numReadyPods, numAllPods float64
+	done := time.After(6 * time.Minute)
+	tick := time.Tick(2 * time.Second)
+
+	st := time.Now()
+	for {
+		select {
+		case <-done:
+			t.Fatalf("Pods never converged. (readyPods: %f - totalPods: %f)", numReadyPods, numAllPods)
+		case <-tick:
+			var err error
+			numReadyPods, err = numberOfPods(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			numAllPods, err = numberOfAllPods(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if numAllPods == numReadyPods && numReadyPods == 5 {
+				t.Logf("Pods converged after %s. (readyPods: %f - totalPods: %f)", time.Since(st).String(), numReadyPods, numAllPods)
+			}
+		}
 	}
 }
 

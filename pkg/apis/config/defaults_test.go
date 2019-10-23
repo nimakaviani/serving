@@ -58,6 +58,7 @@ func TestDefaultsConfiguration(t *testing.T) {
 			RevisionTimeoutSeconds:    DefaultRevisionTimeoutSeconds,
 			MaxRevisionTimeoutSeconds: DefaultMaxRevisionTimeoutSeconds,
 			UserContainerNameTemplate: DefaultUserContainerName,
+			CheckValidityOnDeploy:     DefaultCheckValidityOnDeploy,
 		},
 		config: &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
@@ -74,6 +75,7 @@ func TestDefaultsConfiguration(t *testing.T) {
 			MaxRevisionTimeoutSeconds: 456,
 			RevisionCPURequest:        &oneTwoThree,
 			UserContainerNameTemplate: "{{.Name}}",
+			CheckValidityOnDeploy:     false,
 		},
 		config: &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
@@ -85,6 +87,7 @@ func TestDefaultsConfiguration(t *testing.T) {
 				"max-revision-timeout-seconds": "456",
 				"revision-cpu-request":         "123m",
 				"container-name-template":      "{{.Name}}",
+				"check-validity-on-deploy":     "false",
 			},
 		},
 	}, {

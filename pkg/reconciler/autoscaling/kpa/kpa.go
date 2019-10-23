@@ -291,10 +291,11 @@ func computeActiveCondition(pa *pav1alpha1.PodAutoscaler, want int32, got int) {
 
 // activeThreshold returns the scale required for the pa to be marked Active
 func activeThreshold(pa *pav1alpha1.PodAutoscaler) int {
+	checkValidityOnDeploy, ok := pa.ObjectMeta.Annotations[serving.CheckValidityOnDeployAnnotation]
+	disableDefaultScaleOne := ok && checkValidityOnDeploy == "false"
 	min, _ := pa.ScaleBounds()
-	if min < 1 {
+	if min < 1 && !disableDefaultScaleOne {
 		min = 1
 	}
-
 	return int(min)
 }

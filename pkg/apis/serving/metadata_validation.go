@@ -33,6 +33,7 @@ import (
 
 var (
 	allowedAnnotations = map[string]struct{}{
+		CheckValidityOnDeployAnnotation:  {},
 		UpdaterAnnotation:                {},
 		CreatorAnnotation:                {},
 		RevisionLastPinnedAnnotationKey:  {},

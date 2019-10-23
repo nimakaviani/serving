@@ -18,7 +18,6 @@ package v1
 
 import (
 	"context"
-
 	corev1 "k8s.io/api/core/v1"
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/ptr"

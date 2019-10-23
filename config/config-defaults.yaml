@@ -81,3 +81,8 @@ data:
     # disables this throttling and lets through as many requests as
     # the pod receives.
     container-concurrency: "0"
+
+    # check-validity-on-deploy specifies whether the readiness probe
+    # runs at the time of deployment. By setting this to false,
+    # services will deploy with initially zero instances created.
+    check-validity-on-deploy: "true"

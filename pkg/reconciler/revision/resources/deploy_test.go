@@ -957,7 +957,7 @@ func TestMakeDeployment(t *testing.T) {
 			// Tested above so that we can rely on it here for brevity.
 			podSpec, err := makePodSpec(test.rev, test.lc, test.tc, test.oc, test.cc)
 			if err != nil {
-				t.Fatal("makePodSpec returned errror")
+				t.Fatalf("makePodSpec returned errror %v", err)
 			}
 			test.want.Spec.Template.Spec = *podSpec
 			got, err := MakeDeployment(test.rev, test.lc, test.tc, test.nc, test.oc, test.cc)

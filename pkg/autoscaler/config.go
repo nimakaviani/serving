@@ -76,11 +76,13 @@ func NewConfigFromMap(data map[string]string) (*Config, error) {
 		key          string
 		field        *bool
 		defaultValue bool
-	}{{
-		key:          "enable-scale-to-zero",
-		field:        &lc.EnableScaleToZero,
-		defaultValue: true,
-	}} {
+	}{
+		{
+			key:          "enable-scale-to-zero",
+			field:        &lc.EnableScaleToZero,
+			defaultValue: true,
+		},
+	} {
 		if raw, ok := data[b.key]; !ok {
 			*b.field = b.defaultValue
 		} else {

@@ -70,8 +70,13 @@ func UpdateRevisionAnnotations(rev *v1alpha1.Revision, config *v1alpha1.Configur
 
 	// Populate the CreatorAnnotation from configuration.
 	cans := config.GetAnnotations()
-	if c, ok := cans[serving.UpdaterAnnotation]; ok {
-		rev.Annotations[serving.CreatorAnnotation] = c
+	for k, v := range map[string]string{
+		serving.UpdaterAnnotation: serving.CreatorAnnotation,
+		serving.InitScale:         serving.InitScale,
+	} {
+		if c, ok := cans[k]; ok {
+			rev.Annotations[v] = c
+		}
 	}
 }
 

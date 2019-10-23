@@ -26,10 +26,22 @@ import (
 // SetDefaults implements apis.Defaultable
 func (s *Service) SetDefaults(ctx context.Context) {
 	ctx = apis.WithinParent(ctx, s.ObjectMeta)
+	checkInitScaleAnnotation(ctx, s)
 	s.Spec.SetDefaults(apis.WithinSpec(ctx))
 	if apis.IsInUpdate(ctx) {
 		serving.SetUserInfo(ctx, apis.GetBaseline(ctx).(*Service).Spec, s.Spec, s)
 	} else {
 		serving.SetUserInfo(ctx, nil, s.Spec, s)
 	}
+}
+
+func checkInitScaleAnnotation(ctx context.Context, s *Service) {
+	var ignoreInitScaleAnnotation bool
+	revSpec := s.Spec.ConfigurationSpec.Template.Spec
+	for _, c := range revSpec.PodSpec.Containers {
+		if c.ReadinessProbe != nil {
+			ignoreInitScaleAnnotation = true
+		}
+	}
+	serving.SetInitScaleAnnotation(ctx, s, ignoreInitScaleAnnotation)
 }

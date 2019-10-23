@@ -65,6 +65,8 @@ type Config struct {
 	TickInterval time.Duration
 
 	ScaleToZeroGracePeriod time.Duration
+
+	DisableDefaultReadinessOnDeploy bool
 }
 
 // NewConfigFromMap creates a Config from the supplied map
@@ -78,11 +80,18 @@ func NewConfigFromMap(data map[string]string) (*Config, error) {
 		key          string
 		field        *bool
 		defaultValue bool
-	}{{
-		key:          "enable-scale-to-zero",
-		field:        &lc.EnableScaleToZero,
-		defaultValue: true,
-	}} {
+	}{
+		{
+			key:          "enable-scale-to-zero",
+			field:        &lc.EnableScaleToZero,
+			defaultValue: true,
+		},
+		{
+			key:          "disable-default-readiness-on-deploy",
+			field:        &lc.DisableDefaultReadinessOnDeploy,
+			defaultValue: false,
+		},
+	} {
 		if raw, ok := data[b.key]; !ok {
 			*b.field = b.defaultValue
 		} else {

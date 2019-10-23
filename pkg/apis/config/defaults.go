@@ -21,7 +21,9 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"strconv"
+	"strings"
 	"text/template"
 
 	corev1 "k8s.io/api/core/v1"
@@ -57,6 +59,26 @@ const (
 func NewDefaultsConfigFromMap(data map[string]string) (*Defaults, error) {
 	nc := &Defaults{}
 
+	// Process bool fields.
+	for _, b := range []struct {
+		key          string
+		field        *bool
+		defaultValue bool
+	}{
+		{
+			key:          "disable-default-readiness-on-deploy",
+			field:        &nc.DisableDefaultReadinessOnDeploy,
+			defaultValue: false,
+		},
+	} {
+		if raw, ok := data[b.key]; !ok {
+			*b.field = b.defaultValue
+		} else {
+			log.Println(">> found: ", raw)
+			*b.field = strings.ToLower(raw) == "true"
+		}
+	}
+
 	// Process int64 fields
 	for _, i64 := range []struct {
 		key   string
@@ -81,6 +103,7 @@ func NewDefaultsConfigFromMap(data map[string]string) (*Defaults, error) {
 		} else if val, err := strconv.ParseInt(raw, 10, 64); err != nil {
 			return nil, err
 		} else {
+			log.Println(">> other: ", raw)
 			*i64.field = val
 		}
 	}
@@ -145,6 +168,8 @@ func NewDefaultsConfigFromConfigMap(config *corev1.ConfigMap) (*Defaults, error)
 
 // Defaults includes the default values to be populated by the webhook.
 type Defaults struct {
+	DisableDefaultReadinessOnDeploy bool
+
 	RevisionTimeoutSeconds int64
 	// This is the timeout set for cluster ingress.
 	// RevisionTimeoutSeconds must be less than this value.

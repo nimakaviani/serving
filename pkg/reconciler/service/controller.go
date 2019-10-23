@@ -27,8 +27,10 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
+	defaultconfig "knative.dev/serving/pkg/apis/config"
 	"knative.dev/serving/pkg/apis/serving/v1alpha1"
 	"knative.dev/serving/pkg/reconciler"
+	"knative.dev/serving/pkg/reconciler/service/config"
 )
 
 const (
@@ -67,6 +69,17 @@ func NewController(
 		FilterFunc: controller.Filter(v1alpha1.SchemeGroupVersion.WithKind("Service")),
 		Handler:    controller.HandleAll(impl.EnqueueControllerOf),
 	})
+
+	configsToResync := []interface{}{
+		&defaultconfig.Defaults{},
+	}
+	resync := configmap.TypeFilter(configsToResync...)(func(string, interface{}) {
+		impl.GlobalResync(serviceInformer.Informer())
+	})
+	configStore := config.NewStore(c.Logger.Named("config-store"), resync)
+	configStore.WatchConfigs(cmw)
+	c.configStore = configStore
+	c.Logger.Info("configStore %#v", configStore)
 
 	return impl
 }

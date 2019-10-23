@@ -35,6 +35,7 @@ import (
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/kmp"
 	"knative.dev/pkg/logging"
+	defaultconfig "knative.dev/serving/pkg/apis/config"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
 	"knative.dev/serving/pkg/apis/serving/v1alpha1"
 	"knative.dev/serving/pkg/apis/serving/v1beta1"
@@ -43,6 +44,7 @@ import (
 	cfgreconciler "knative.dev/serving/pkg/reconciler/configuration"
 	"knative.dev/serving/pkg/reconciler/service/resources"
 	resourcenames "knative.dev/serving/pkg/reconciler/service/resources/names"
+	corev1listers "k8s.io/client-go/listers/core/v1"
 )
 
 const (
@@ -59,6 +61,9 @@ type Reconciler struct {
 	configurationLister listers.ConfigurationLister
 	revisionLister      listers.RevisionLister
 	routeLister         listers.RouteLister
+	configMapLister     corev1listers.ConfigMapLister
+
+	configStore reconciler.ConfigStore
 }
 
 // Check that our Reconciler implements controller.Reconciler
@@ -69,6 +74,9 @@ var _ controller.Reconciler = (*Reconciler)(nil)
 // with the current status of the resource.
 func (c *Reconciler) Reconcile(ctx context.Context, key string) error {
 	logger := logging.FromContext(ctx)
+	ctx = c.configStore.ToContext(ctx)
+
+	logger.Infof(">> default-config %w", defaultconfig.FromContext(ctx))
 
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {

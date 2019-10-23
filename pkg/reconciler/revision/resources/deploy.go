@@ -155,9 +155,9 @@ func makePodSpec(rev *v1alpha1.Revision, loggingConfig *logging.Config, tracingC
 		if userContainer.ReadinessProbe.HTTPGet != nil || userContainer.ReadinessProbe.TCPSocket != nil {
 
 			// error if the readiness check is disabled
-			if autoscalerConfig != nil && autoscalerConfig.DisableDefaultReadinessOnDeploy {
-				return nil, errors.Wrap(err, "user-provided readiness probe will be ignored in with enable-default-readiness-on-deploy set")
-			}
+			// if autoscalerConfig != nil && autoscalerConfig.DisableDefaultReadinessOnDeploy {
+			// 	return nil, errors.Wrap(err, "user-provided readiness probe will be ignored in with enable-default-readiness-on-deploy set")
+			// }
 
 			// HTTP and TCP ReadinessProbes are executed by the queue-proxy directly against the
 			// user-container instead of via kubelet.
@@ -245,13 +245,15 @@ func MakeDeployment(rev *v1alpha1.Revision,
 			podTemplateAnnotations[IstioOutboundIPRangeAnnotation] = networkConfig.IstioOutboundIPRanges
 		}
 	}
+
 	podSpec, err := makePodSpec(rev, loggingConfig, tracingConfig, observabilityConfig, autoscalerConfig, deploymentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PodSpec: %w", err)
 	}
 
 	replicaCount := ptr.Int32(1)
-	if autoscalerConfig.DisableDefaultReadinessOnDeploy {
+	ann, found := rev.ObjectMeta.Annotations[serving.InitScale]
+	if found && ann == "true" {
 		replicaCount = ptr.Int32(0)
 	}
 

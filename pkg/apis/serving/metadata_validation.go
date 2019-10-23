@@ -31,6 +31,7 @@ import (
 
 var (
 	allowedAnnotations = map[string]struct{}{
+		InitScale:                        {},
 		UpdaterAnnotation:                {},
 		CreatorAnnotation:                {},
 		RevisionLastPinnedAnnotationKey:  {},
@@ -106,6 +107,21 @@ func ValidateClusterVisibilityLabel(label string) (errs *apis.FieldError) {
 		errs = apis.ErrInvalidValue(label, routeconfig.VisibilityLabelKey)
 	}
 	return
+}
+
+func SetInitScaleAnnotation(ctx context.Context, resource interface{}) {
+	objectMetaAccessor, ok := resource.(metav1.ObjectMetaAccessor)
+	if !ok {
+		return
+	}
+	ans := objectMetaAccessor.GetObjectMeta().GetAnnotations()
+	if ans == nil {
+		ans = map[string]string{}
+		objectMetaAccessor.GetObjectMeta().SetAnnotations(ans)
+	}
+
+	defaultConfig := config.FromContext(ctx).Defaults
+	ans[InitScale] = strconv.FormatBool(defaultConfig.DisableDefaultReadinessOnDeploy)
 }
 
 // SetUserInfo sets creator and updater annotations

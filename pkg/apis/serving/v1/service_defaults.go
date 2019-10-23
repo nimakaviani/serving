@@ -28,6 +28,7 @@ func (s *Service) SetDefaults(ctx context.Context) {
 	ctx = apis.WithinParent(ctx, s.ObjectMeta)
 	s.Spec.SetDefaults(apis.WithinSpec(ctx))
 
+	serving.SetInitScaleAnnotation(ctx, s)
 	if apis.IsInUpdate(ctx) {
 		serving.SetUserInfo(ctx, apis.GetBaseline(ctx).(*Service).Spec, s.Spec, s)
 	} else {

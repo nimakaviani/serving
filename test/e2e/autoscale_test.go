@@ -46,6 +46,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 )
@@ -56,6 +57,7 @@ const (
 	containerConcurrency = 6.0
 	targetUtilization    = 0.7
 	successRateSLO       = 0.999
+	sleepTime            = 100
 )
 
 type testContext struct {
@@ -68,11 +70,12 @@ type testContext struct {
 	metric            string
 }
 
-func getVegetaTarget(kubeClientset *kubernetes.Clientset, domain, endpointOverride string, resolvable bool) (vegeta.Target, error) {
+func getVegetaTarget(kubeClientset *kubernetes.Clientset, domain, endpointOverride string, resolvable bool, sleep int) (vegeta.Target, error) {
 	if resolvable {
+		fmt.Println(">> resolvable", domain)
 		return vegeta.Target{
 			Method: http.MethodGet,
-			URL:    fmt.Sprintf("http://%s?sleep=100", domain),
+			URL:    fmt.Sprintf("http://%s?sleep=%d", domain, sleep),
 		}, nil
 	}
 
@@ -101,14 +104,16 @@ func generateTraffic(
 	attacker *vegeta.Attacker,
 	pacer vegeta.Pacer,
 	duration time.Duration,
-	stopChan chan struct{}) error {
+	stopChan chan struct{},
+	sleep int) error {
 
 	target, err := getVegetaTarget(
-		ctx.clients.KubeClient.Kube, ctx.resources.Route.Status.URL.URL().Hostname(), pkgTest.Flags.IngressEndpoint, test.ServingFlags.ResolvableDomain)
+		ctx.clients.KubeClient.Kube, ctx.resources.Route.Status.URL.URL().Hostname(), pkgTest.Flags.IngressEndpoint, test.ServingFlags.ResolvableDomain, sleep)
 	if err != nil {
 		return fmt.Errorf("error creating vegeta target: %w", err)
 	}
 
+	fmt.Println("attacking ...")
 	results := attacker.Attack(vegeta.NewStaticTargeter(target), pacer, duration, "load-test")
 	defer attacker.Stop()
 
@@ -151,7 +156,7 @@ func generateTrafficAtFixedConcurrency(ctx *testContext, concurrency int, durati
 	attacker := vegeta.NewAttacker(vegeta.Timeout(duration), vegeta.Workers(uint64(concurrency)), vegeta.MaxWorkers(uint64(concurrency)))
 
 	ctx.t.Logf("Maintaining %d concurrent requests for %v.", concurrency, duration)
-	return generateTraffic(ctx, attacker, pacer, duration, stopChan)
+	return generateTraffic(ctx, attacker, pacer, duration, stopChan, sleepTime)
 }
 
 func generateTrafficAtFixedRPS(ctx *testContext, rps int, duration time.Duration, stopChan chan struct{}) error {
@@ -159,7 +164,20 @@ func generateTrafficAtFixedRPS(ctx *testContext, rps int, duration time.Duration
 	attacker := vegeta.NewAttacker(vegeta.Timeout(duration))
 
 	ctx.t.Logf("Maintaining %v RPS requests for %v.", rps, duration)
-	return generateTraffic(ctx, attacker, pacer, duration, stopChan)
+	return generateTraffic(ctx, attacker, pacer, duration, stopChan, sleepTime)
+}
+
+func generateSineTraffic(ctx *testContext, rps int, duration time.Duration, sleep int, stopChan chan struct{}) error {
+	pacer := vegeta.SinePacer{
+		Period: duration,
+		Mean:   vegeta.Rate{rps * 2, time.Second},
+		Amp:    vegeta.Rate{rps, time.Second},
+	}
+	fmt.Printf("Pacer: %s\n", pacer.String())
+	attacker := vegeta.NewAttacker(vegeta.Timeout(duration))
+
+	ctx.t.Logf("Sine Pacer of Mean %v, Amp %v requests for %v.", rps, rps, duration)
+	return generateTraffic(ctx, attacker, pacer, duration, stopChan, sleep)
 }
 
 // setup creates a new service, with given service options.
@@ -250,6 +268,19 @@ func assertScaleDown(ctx *testContext) {
 	ctx.t.Log("Scaled down.")
 }
 
+func numberOfAllPods(ctx *testContext) (float64, error) {
+	labelSelector := metav1.LabelSelector{MatchLabels: map[string]string{serving.RevisionLabelKey: ctx.resources.Revision.Name}}
+	pods, err := ctx.clients.KubeClient.Kube.CoreV1().Pods(test.ServingNamespace).List(
+		metav1.ListOptions{
+			LabelSelector: labels.Set(labelSelector.MatchLabels).String(),
+		})
+	if err != nil {
+		return 0, fmt.Errorf("failed to get pods for revision %s: %w", ctx.resources.Revision.Name, err)
+	}
+
+	return float64(len(pods.Items)), nil
+}
+
 func numberOfPods(ctx *testContext) (float64, error) {
 	// SKS name matches that of revision.
 	n := ctx.resources.Revision.Name
@@ -269,6 +300,55 @@ func numberOfPods(ctx *testContext) (float64, error) {
 		return 0, fmt.Errorf("failed to get endpoints %s: %w", sks.Status.PrivateServiceName, err)
 	}
 	return float64(resources.ReadyAddressCount(eps)), nil
+}
+
+func assertGracefulPodScalability(ctx *testContext, rps, sleep int, expectedPods float64, duration time.Duration) {
+	ctx.t.Helper()
+
+	stopChan := make(chan struct{})
+	var grp errgroup.Group
+	grp.Go(func() error {
+		return generateSineTraffic(ctx, rps, duration, sleep, stopChan)
+	})
+
+	grp.Go(func() error {
+		// Short-circuit traffic generation once we exit from the check logic.
+		defer close(stopChan)
+
+		done := time.After(duration)
+		timer := time.Tick(2 * time.Second)
+		for {
+			select {
+			case <-timer:
+				// Each 2 second, check that the number of pods is at least `minPods`. `minPods` is increasing
+				// to verify that the number of pods doesn't go down while we are scaling up.
+				activePods, err := numberOfPods(ctx)
+				if err != nil {
+					return err
+				}
+
+				allPods, err := numberOfAllPods(ctx)
+				if err != nil {
+					return err
+				}
+
+				ctx.t.Logf("activePods %v, allPods %v", activePods, allPods)
+				fmt.Printf("activePods %v, allPods %v \n", activePods, allPods)
+
+				if allPods > expectedPods {
+					mes := fmt.Sprintf("expected maximum %v replicas, got total of %v replicas for revision %s", allPods, expectedPods, ctx.resources.Revision.Name)
+					ctx.t.Log(mes)
+					return errors.New(mes)
+				}
+			case <-done:
+				return nil
+			}
+		}
+	})
+
+	if err := grp.Wait(); err != nil {
+		ctx.t.Error(err)
+	}
 }
 
 func assertAutoscaleUpToNumPods(ctx *testContext, curPods, targetPods float64, duration time.Duration, quick bool) {
@@ -427,6 +507,17 @@ func TestRPSBasedAutoscaleUpCountPods(t *testing.T) {
 			assertAutoscaleUpToNumPods(ctx, 3, 4, 60*time.Second, true)
 		})
 	}
+}
+
+func TestGracefulScaledown(t *testing.T) {
+	t.Parallel()
+	cancel := logstream.Start(t)
+	defer cancel()
+
+	ctx := setup(t, autoscaling.KPA, autoscaling.Concurrency, 1, 1)
+	defer test.TearDown(ctx.clients, ctx.names)
+
+	assertGracefulPodScalability(ctx, 2, 10000 /* sleep millisecond */, 100, 3*time.Minute /* 2 x 90sec scale down */)
 }
 
 func TestAutoscaleSustaining(t *testing.T) {

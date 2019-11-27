@@ -58,6 +58,7 @@ var (
 		"knative.dev/serving/autoscaler/desired_pods",
 		"knative.dev/serving/autoscaler/requested_pods",
 		"knative.dev/serving/autoscaler/actual_pods",
+		"knative.dev/serving/autoscaler/not_ready_pods",
 		"knative.dev/serving/autoscaler/stable_request_concurrency",
 		"knative.dev/serving/autoscaler/panic_request_concurrency",
 		"knative.dev/serving/autoscaler/target_concurrency_per_pod",

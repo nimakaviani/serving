@@ -134,7 +134,7 @@ func urlFromTarget(t, ns string) string {
 // Scrape calls the destination service then sends it
 // to the given stats channel.
 func (s *ServiceScraper) Scrape() (Stat, error) {
-	readyPodsCount, err := s.counter.ReadyCount()
+	readyPodsCount, _, err := s.counter.ReadyCount()
 	if err != nil {
 		return emptyStat, ErrFailedGetEndpoints
 	}

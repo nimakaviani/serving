@@ -299,7 +299,8 @@ func numberOfPods(ctx *testContext) (float64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to get endpoints %s: %w", sks.Status.PrivateServiceName, err)
 	}
-	return float64(resources.ReadyAddressCount(eps)), nil
+	count, _ := resources.ReadyNotReadyAddressCount(eps)
+	return float64(count), nil
 }
 
 func assertGracefulPodScalability(ctx *testContext, rps, sleep int, expectedPods float64, duration time.Duration) {
@@ -600,8 +601,9 @@ func TestTargetBurstCapacity(t *testing.T) {
 		if err != nil {
 			return false, err
 		}
-		t.Logf("resources.ReadyAddressCount(svcEps) = %d", resources.ReadyAddressCount(svcEps))
-		return resources.ReadyAddressCount(svcEps) == 2, nil
+		count, _ := resources.ReadyNotReadyAddressCount(svcEps)
+		t.Logf("resources.ReadyAddressCount(svcEps) = %d", count)
+		return count == 2, nil
 	}); err != nil {
 		t.Errorf("Never achieved subset of size 2: %v", err)
 	}
@@ -677,7 +679,8 @@ func TestFastScaleToZero(t *testing.T) {
 		if err != nil {
 			return false, err
 		}
-		return resources.ReadyAddressCount(eps) == 0, nil
+		count, _ := resources.ReadyNotReadyAddressCount(eps)
+		return count == 0, nil
 	}); err != nil {
 		t.Fatalf("Did not observe %q to actually be emptied", epsN)
 	}

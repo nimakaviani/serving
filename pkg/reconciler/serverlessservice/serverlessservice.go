@@ -199,7 +199,7 @@ func (r *reconciler) reconcilePublicEndpoints(ctx context.Context, sks *netv1alp
 	}
 	// We still might be "ready" even if in proxy mode,
 	// if proxy mode is by means of burst capacity handling.
-	pvtReady := presources.ReadyAddressCount(pvtEps)
+	pvtReady, _ := presources.ReadyNotReadyAddressCount(pvtEps)
 	if pvtReady > 0 {
 		foundServingEndpoints = true
 	}

@@ -20,6 +20,7 @@ import (
 	"context"
 
 	endpointsinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/endpoints"
+	podinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/pod"
 	serviceinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/service"
 	metricinformer "knative.dev/serving/pkg/client/injection/informers/autoscaling/v1alpha1/metric"
 	painformer "knative.dev/serving/pkg/client/injection/informers/autoscaling/v1alpha1/podautoscaler"
@@ -51,6 +52,7 @@ func NewController(
 	sksInformer := sksinformer.Get(ctx)
 	serviceInformer := serviceinformer.Get(ctx)
 	endpointsInformer := endpointsinformer.Get(ctx)
+	podsInformer := podinformer.Get(ctx)
 	metricInformer := metricinformer.Get(ctx)
 	psInformerFactory := presources.NewPodScalableInformerFactory(ctx)
 
@@ -64,6 +66,7 @@ func NewController(
 			PSInformerFactory: psInformerFactory,
 		},
 		endpointsLister: endpointsInformer.Lister(),
+		podsLister:      podsInformer.Lister(),
 		deciders:        deciders,
 	}
 	impl := controller.NewImpl(c, c.Logger, "KPA-Class Autoscaling")

@@ -22,12 +22,13 @@ import (
 )
 
 // ReadyAddressCount returns the total number of addresses ready for the given endpoint.
-func ReadyAddressCount(endpoints *corev1.Endpoints) int {
-	var total int
+func ReadyNotReadyAddressCount(endpoints *corev1.Endpoints) (int, int) {
+	var ready, notReady int
 	for _, subset := range endpoints.Subsets {
-		total += len(subset.Addresses)
+		ready += len(subset.Addresses)
+		notReady += len(subset.NotReadyAddresses)
 	}
-	return total
+	return ready, notReady
 }
 
 // ReadyPodCounter provides a count of currently ready pods. This
@@ -39,7 +40,7 @@ func ReadyAddressCount(endpoints *corev1.Endpoints) int {
 // The error value is returned if the ReadyPodCounter is unable to
 // calculate a value.
 type ReadyPodCounter interface {
-	ReadyCount() (int, error)
+	ReadyCount() (int, int, error)
 }
 
 type scopedEndpointCounter struct {
@@ -48,12 +49,13 @@ type scopedEndpointCounter struct {
 	serviceName     string
 }
 
-func (eac *scopedEndpointCounter) ReadyCount() (int, error) {
+func (eac *scopedEndpointCounter) ReadyCount() (int, int, error) {
 	endpoints, err := eac.endpointsLister.Endpoints(eac.namespace).Get(eac.serviceName)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return ReadyAddressCount(endpoints), nil
+	ready, notReady := ReadyNotReadyAddressCount(endpoints)
+	return ready, notReady, nil
 }
 
 // NewScopedEndpointsCounter creates a ReadyPodCounter that uses

@@ -134,6 +134,30 @@ data:
                      "intervalFactor": 1,
                      "legendFormat": "Requested Pods",
                      "refId": "C"
+                     },
+                     {
+                     "expr": "sum(autoscaler_pending_pods{namespace_name=\"$namespace\", configuration_name=\"$configuration\", revision_name=\"$revision\"})",
+                     "format": "time_series",
+                     "interval": "1s",
+                     "intervalFactor": 1,
+                     "legendFormat": "Pending Pods",
+                     "refId": "P"
+                     },
+                     {
+                     "expr": "sum(autoscaler_not_ready_pods{namespace_name=\"$namespace\", configuration_name=\"$configuration\", revision_name=\"$revision\"})",
+                     "format": "time_series",
+                     "interval": "1s",
+                     "intervalFactor": 1,
+                     "legendFormat": "NotReady Pods",
+                     "refId": "N"
+                     },
+                     {
+                     "expr": "sum(autoscaler_terminating_pods{namespace_name=\"$namespace\", configuration_name=\"$configuration\", revision_name=\"$revision\"})",
+                     "format": "time_series",
+                     "interval": "1s",
+                     "intervalFactor": 1,
+                     "legendFormat": "Terminating Pods",
+                     "refId": "T"
                      }
                   ],
                   "thresholds": [],

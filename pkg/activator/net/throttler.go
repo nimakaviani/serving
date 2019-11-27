@@ -555,7 +555,7 @@ func (t *Throttler) activatorEndpointsUpdated(newObj interface{}) {
 	eps := endpointsToDests(endpoints, networking.ServicePortNameHTTP1).List()
 	t.logger.Debugf("All Activator IPS: %v, my IP: %s", eps, t.ipAddress)
 	idx := inferIndex(eps, t.ipAddress)
-	activatorCount := resources.ReadyAddressCount(endpoints)
+	activatorCount, _ := resources.ReadyNotReadyAddressCount(endpoints)
 	t.logger.Infof("Got %d ready activator endpoints, our position is: %d", activatorCount, idx)
 	atomic.StoreInt32(&t.numActivators, int32(activatorCount))
 	atomic.StoreInt32(&t.activatorIndex, int32(idx))

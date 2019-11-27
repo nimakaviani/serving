@@ -77,7 +77,7 @@ func New(
 	// accumulate enough data to make conscious decisions.
 	podCounter := resources.NewScopedEndpointsCounter(lister,
 		namespace, deciderSpec.ServiceName)
-	curC, err := podCounter.ReadyCount()
+	curC, _, err := podCounter.ReadyCount()
 	if err != nil {
 		// This always happens on new revision creation, since decider
 		// is reconciled before SKS has even chance of creating the service/endpoints.
@@ -128,7 +128,7 @@ func (a *Autoscaler) Scale(ctx context.Context, now time.Time) (desiredPodCount 
 	logger := logging.FromContext(ctx)
 
 	spec, podCounter := a.currentSpecAndPC()
-	originalReadyPodsCount, err := podCounter.ReadyCount()
+	originalReadyPodsCount, _, err := podCounter.ReadyCount()
 	// If the error is NotFound, then presume 0.
 	if err != nil && !apierrors.IsNotFound(err) {
 		logger.Errorw("Failed to get Endpoints via K8S Lister", zap.Error(err))

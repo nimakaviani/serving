@@ -306,17 +306,29 @@ func numberOfPods(ctx *testContext) (float64, error) {
 func assertGracefulPodScalability(ctx *testContext, rps, sleep int, expectedPods float64, duration time.Duration) {
 	ctx.t.Helper()
 
-	stopChan := make(chan struct{})
+	stopChan1, stopChan2 := make(chan struct{}), make(chan struct{})
 	var grp errgroup.Group
+
 	grp.Go(func() error {
-		return generateSineTraffic(ctx, rps, duration, sleep, stopChan)
+		grp.Go(func() error {
+			fmt.Println("-> starting first wave")
+			return generateSineTraffic(ctx, rps, duration, sleep, stopChan1)
+		})
+
+		retryInterval := duration / 3 * 2
+		fmt.Printf("-> waiting for %s\n", retryInterval.String())
+		time.Sleep(retryInterval)
+
+		fmt.Println("-> starting second wave")
+		return generateSineTraffic(ctx, rps, duration, sleep, stopChan2)
 	})
 
 	grp.Go(func() error {
 		// Short-circuit traffic generation once we exit from the check logic.
-		defer close(stopChan)
+		defer close(stopChan1)
+		defer close(stopChan2)
 
-		done := time.After(duration)
+		done := time.After(3 * duration)
 		timer := time.Tick(2 * time.Second)
 		for {
 			select {
@@ -333,8 +345,10 @@ func assertGracefulPodScalability(ctx *testContext, rps, sleep int, expectedPods
 					return err
 				}
 
+				t := time.Now()
 				ctx.t.Logf("activePods %v, allPods %v", activePods, allPods)
-				fmt.Printf("activePods %v, allPods %v \n", activePods, allPods)
+				fmt.Printf("[%d-%02d-%02dT%02d:%02d:%02d-00:00] - activePods %v, allPods %v \n", t.Year(), t.Month(), t.Day(),
+					t.Hour(), t.Minute(), t.Second(), activePods, allPods)
 
 				if allPods > expectedPods {
 					mes := fmt.Sprintf("expected maximum %v replicas, got total of %v replicas for revision %s", allPods, expectedPods, ctx.resources.Revision.Name)

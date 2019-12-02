@@ -196,7 +196,104 @@ data:
                      "show": false
                      }
                   ]
-               }
+               },
+               {
+                   "aliasColors": {},
+                   "bars": false,
+                   "dashLength": 10,
+                   "dashes": false,
+                   "datasource": "prometheus",
+                   "fill": 1,
+                   "gridPos": {
+                   "h": 9,
+                   "w": 24,
+                   "x": 0,
+                   "y": 52
+                   },
+                   "id": 29,
+                   "legend": {
+                   "avg": false,
+                   "current": false,
+                   "max": false,
+                   "min": false,
+                   "show": true,
+                   "total": false,
+                   "values": false
+                   },
+                   "lines": true,
+                   "linewidth": 1,
+                   "links": [],
+                   "nullPointMode": "null",
+                   "percentage": false,
+                   "pointradius": 5,
+                   "points": false,
+                   "renderer": "flot",
+                   "seriesOverrides": [
+                   {
+                      "alias": "Panic Mode",
+                      "color": "#ea6460",
+                      "dashes": true,
+                      "fill": 2,
+                      "linewidth": 2,
+                      "steppedLine": true,
+                      "yaxis": 2
+                   },
+                   {
+                      "alias": "Target Concurrency Per Pod",
+                      "color": "#0a50a1",
+                      "dashes": true,
+                      "steppedLine": false
+                   }
+                   ],
+                   "spaceLength": 10,
+                   "stack": false,
+                   "steppedLine": true,
+                   "targets": [
+                   {
+                      "expr": "sum(activator_request_concurrency{namespace_name=\"$namespace\", configuration_name=\"$configuration\", revision_name=\"$revision\"})",
+                      "format": "time_series",
+                      "interval": "1s",
+                      "intervalFactor": 1,
+                      "legendFormat": "Request Concurrency",
+                      "refId": "A"
+                   }
+                   ],
+                   "thresholds": [],
+                   "timeFrom": null,
+                   "timeShift": null,
+                   "title": "Request Concurrency",
+                   "tooltip": {
+                   "shared": true,
+                   "sort": 0,
+                   "value_type": "individual"
+                   },
+                   "type": "graph",
+                   "xaxis": {
+                   "buckets": null,
+                   "mode": "time",
+                   "name": null,
+                   "show": true,
+                   "values": []
+                   },
+                   "yaxes": [
+                   {
+                      "format": "short",
+                      "label": "",
+                      "logBase": 1,
+                      "max": null,
+                      "min": null,
+                      "show": true
+                   },
+                   {
+                      "format": "short",
+                      "label": "",
+                      "logBase": 1,
+                      "max": null,
+                      "min": null,
+                      "show": false
+                   }
+                   ]
+                }
                ],
                "title": "Revision Pod Counts",
                "type": "row"

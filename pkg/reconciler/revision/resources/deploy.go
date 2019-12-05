@@ -19,8 +19,8 @@ package resources
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
-	"github.com/pkg/errors"
 	"knative.dev/pkg/kmeta"
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/ptr"
@@ -110,6 +110,12 @@ func rewriteUserProbe(p *corev1.Probe, userPort int) {
 }
 
 func makePodSpec(rev *v1alpha1.Revision, loggingConfig *logging.Config, tracingConfig *tracingconfig.Config, observabilityConfig *metrics.ObservabilityConfig, deploymentConfig *deployment.Config) (*corev1.PodSpec, error) {
+	queueContainer, err := makeQueueContainer(rev, loggingConfig, tracingConfig, observabilityConfig, deploymentConfig)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create queue-proxy container: %w", err)
+	}
+
 	userContainer := rev.Spec.GetContainer().DeepCopy()
 	// Adding or removing an overwritten corev1.Container field here? Don't forget to
 	// update the fieldmasks / validations in pkg/apis/serving
@@ -134,12 +140,6 @@ func makePodSpec(rev *v1alpha1.Revision, loggingConfig *logging.Config, tracingC
 
 	if userContainer.TerminationMessagePolicy == "" {
 		userContainer.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
-	}
-
-	queueContainer, err := makeQueueContainer(rev, loggingConfig, tracingConfig, observabilityConfig, deploymentConfig)
-
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to create queue-proxy container")
 	}
 
 	if userContainer.ReadinessProbe != nil {
@@ -230,7 +230,7 @@ func MakeDeployment(rev *v1alpha1.Revision,
 
 	replicaCount := ptr.Int32(1)
 	ann, found := rev.ObjectMeta.Annotations[serving.CheckValidityOnDeployAnnotation]
-	if found && ann == strconv.FormatBool(false) {
+	if found && strings.EqualFold(ann, "false") {
 		replicaCount = ptr.Int32(0)
 	}
 

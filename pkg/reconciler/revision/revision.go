@@ -19,9 +19,7 @@ package revision
 import (
 	"context"
 	"fmt"
-	"knative.dev/serving/pkg/apis/serving"
 	"reflect"
-	"strconv"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn/k8schain"
@@ -174,7 +172,6 @@ func (c *Reconciler) reconcile(ctx context.Context, rev *v1alpha1.Revision) erro
 
 	rev.Status.InitializeConditions()
 	c.updateRevisionLoggingURL(ctx, rev)
-	c.setInitScaleAnnotation(ctx, rev)
 
 	if err := rev.ConvertUp(ctx, &v1beta1.Revision{}); err != nil {
 		if ce, ok := err.(*v1alpha1.CannotConvertError); ok {
@@ -247,22 +244,4 @@ func (c *Reconciler) updateStatus(desired *v1alpha1.Revision) (*v1alpha1.Revisio
 	existing := rev.DeepCopy()
 	existing.Status = desired.Status
 	return c.ServingClientSet.ServingV1alpha1().Revisions(desired.Namespace).UpdateStatus(existing)
-}
-
-
-
-func (c *Reconciler) setInitScaleAnnotation(ctx context.Context, rev *v1alpha1.Revision) {
-	cfg := config.FromContext(ctx)
-	if cfg == nil || cfg.Defaults == nil {
-		return
-	}
-	ans := rev.GetObjectMeta().GetAnnotations()
-	if ans == nil {
-		ans = map[string]string{}
-	}
-	// Use the value from the cluster if the annotation is not provided
-	if _, ok := ans[serving.CheckValidityOnDeployAnnotation]; !ok {
-		ans[serving.CheckValidityOnDeployAnnotation] = strconv.FormatBool(cfg.Defaults.CheckValidityOnDeploy)
-	}
-	rev.GetObjectMeta().SetAnnotations(ans)
 }

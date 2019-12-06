@@ -18,10 +18,13 @@ package v1alpha1
 
 import (
 	"context"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/ptr"
+	"knative.dev/serving/pkg/apis/config"
+	"knative.dev/serving/pkg/apis/serving"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
 )
 
@@ -31,6 +34,17 @@ func (r *Revision) SetDefaults(ctx context.Context) {
 
 // SetDefaults implements apis.Defaultable
 func (rts *RevisionTemplateSpec) SetDefaults(ctx context.Context) {
+	cfg := config.FromContextOrDefaults(ctx)
+
+	if _, ok := rts.Annotations[serving.CheckValidityOnDeployAnnotation]; !ok {
+		if rts.Annotations == nil {
+			rts.Annotations = make(map[string]string)
+		}
+
+		rts.Annotations[serving.CheckValidityOnDeployAnnotation] =
+			strconv.FormatBool(cfg.Defaults.CheckValidityOnDeploy)
+	}
+
 	rts.Spec.SetDefaults(apis.WithinSpec(ctx))
 }
 

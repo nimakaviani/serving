@@ -60,6 +60,8 @@ type DeciderSpec struct {
 	StableWindow time.Duration
 	// The name of the k8s service for pod information.
 	ServiceName string
+
+	NewRevision bool
 }
 
 // DeciderStatus is the current scale recommendation.

@@ -164,7 +164,10 @@ func (a *Autoscaler) Scale(ctx context.Context, now time.Time) (desiredPodCount 
 		} else {
 			logger.Errorw("Failed to obtain metrics", zap.Error(err))
 		}
-		return 0, 0, false
+
+		if !a.deciderSpec.NewRevision {
+			return 0, 0, false
+		}
 	}
 
 	// Make sure we don't get stuck with the same number of pods, if the scale up rate

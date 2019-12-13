@@ -134,7 +134,7 @@ func (c *Reconciler) reconcile(ctx context.Context, pa *pav1alpha1.PodAutoscaler
 	}
 
 	pa.Status.MetricsServiceName = sks.Status.PrivateServiceName
-	decider, err := c.reconcileDecider(ctx, pa, pa.Status.MetricsServiceName)
+	decider, err := c.reconcileDecider(ctx, pa, pa.Status.MetricsServiceName, pa.Status.IsInactive())
 	if err != nil {
 		return fmt.Errorf("error reconciling Decider: %w", err)
 	}
@@ -193,8 +193,8 @@ func (c *Reconciler) reconcile(ctx context.Context, pa *pav1alpha1.PodAutoscaler
 	return computeStatus(pa, want, got)
 }
 
-func (c *Reconciler) reconcileDecider(ctx context.Context, pa *pav1alpha1.PodAutoscaler, k8sSvc string) (*autoscaler.Decider, error) {
-	desiredDecider := resources.MakeDecider(ctx, pa, config.FromContext(ctx).Autoscaler, k8sSvc)
+func (c *Reconciler) reconcileDecider(ctx context.Context, pa *pav1alpha1.PodAutoscaler, k8sSvc string, newRevision bool) (*autoscaler.Decider, error) {
+	desiredDecider := resources.MakeDecider(ctx, pa, config.FromContext(ctx).Autoscaler, k8sSvc, newRevision)
 	decider, err := c.deciders.Get(ctx, desiredDecider.Namespace, desiredDecider.Name)
 	if errors.IsNotFound(err) {
 		decider, err = c.deciders.Create(ctx, desiredDecider)

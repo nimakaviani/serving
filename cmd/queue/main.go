@@ -21,6 +21,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -202,6 +203,17 @@ func handler(reqChan chan queue.ReqEvent, breaker *queue.Breaker, handler http.H
 	}
 }
 
+func readScaleDownLabel() (bool, error) {
+	content, err := ioutil.ReadFile("/etc/podinfo/labels")
+	if err != nil {
+		//TODO nimak: log the error here but dont choke on it
+		return false, nil
+	}
+
+	scaleDown, _ := strconv.ParseBool(string(content))
+	return scaleDown, nil
+}
+
 func handleKnativeProbe(w http.ResponseWriter, r *http.Request, ph string, healthState *health.State, prober func() bool, isAggressive bool) {
 	_, probeSpan := trace.StartSpan(r.Context(), "probe")
 	defer probeSpan.End()
@@ -217,6 +229,16 @@ func handleKnativeProbe(w http.ResponseWriter, r *http.Request, ph string, healt
 		http.Error(w, "no probe", http.StatusInternalServerError)
 		probeSpan.Annotate([]trace.Attribute{
 			trace.StringAttribute("queueproxy.probe.error", "no probe")}, "error")
+		return
+	}
+
+	// TODO nimak: maybe not fail readiness in case of error
+	scaleDown, err := readScaleDownLabel()
+	if err != nil || scaleDown {
+		fmt.Printf("failing pod readiness")
+		http.Error(w, fmt.Sprintf(badProbeTemplate, ph), http.StatusBadRequest)
+		probeSpan.Annotate([]trace.Attribute{
+			trace.StringAttribute("queueproxy.probe.error", "failing health check")}, "error")
 		return
 	}
 
@@ -236,6 +258,8 @@ func probeQueueHealthPath(port int, timeoutSeconds int) error {
 	}
 
 	url := fmt.Sprintf(healthURLTemplate, port)
+	println(">> url", url)
+
 	timeoutDuration := readiness.PollTimeout
 	if timeoutSeconds != 0 {
 		timeoutDuration = time.Duration(timeoutSeconds) * time.Second
@@ -251,6 +275,8 @@ func probeQueueHealthPath(port int, timeoutSeconds int) error {
 	defer cancel()
 	stopCh := ctx.Done()
 
+	scaleDown, _ := readScaleDownLabel()
+
 	var lastErr error
 	// Using PollImmediateUntil instead of PollImmediate because if timeout is reached while waiting for first
 	// invocation of conditionFunc, it exits immediately without trying for a second time.
@@ -264,13 +290,20 @@ func probeQueueHealthPath(port int, timeoutSeconds int) error {
 		// Add the header to indicate this is a probe request.
 		req.Header.Add(network.ProbeHeaderName, queue.Name)
 		req.Header.Add(network.UserAgentKey, network.QueueProxyUserAgent)
+		println(">> sending req")
 		res, lastErr := httpClient.Do(req)
 		if lastErr != nil {
 			// Return nil error for retrying
 			return false, nil
 		}
 		defer res.Body.Close()
-		return health.IsHTTPProbeReady(res), nil
+		println(">> checking resp")
+		success := health.IsHTTPProbeReady(res)
+		if !success && scaleDown {
+			return false, fmt.Errorf("fail prober for scaledown")
+		}
+
+		return success, nil
 	}, stopCh)
 
 	if lastErr != nil {

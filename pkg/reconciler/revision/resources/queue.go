@@ -223,6 +223,8 @@ func makeQueueContainer(rev *v1alpha1.Revision, loggingConfig *logging.Config, t
 		volumeMounts = append(volumeMounts, internalVolumeMount)
 	}
 
+	volumeMounts = append(volumeMounts, labelVolumeMount)
+
 	rp := rev.Spec.GetContainer().ReadinessProbe.DeepCopy()
 
 	applyReadinessProbeDefaults(rp, userPort)

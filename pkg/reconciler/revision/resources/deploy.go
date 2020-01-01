@@ -41,10 +41,15 @@ import (
 )
 
 const (
-	varLogVolumeName   = "knative-var-log"
-	varLogVolumePath   = "/var/log"
-	internalVolumeName = "knative-internal"
-	internalVolumePath = "/var/knative-internal"
+	varLogVolumeName     = "knative-var-log"
+	varLogVolumePath     = "/var/log"
+	internalVolumeName   = "knative-internal"
+	internalVolumePath   = "/var/knative-internal"
+	podInfoVolumeName    = "podinfo"
+	podInfoVolumePath    = "/etc/podinfo"
+	metadataLabelsPath   = "metadata.labels"
+	metadataLabelsName   = "labels"
+	preferScaleDownLabel = "kubernetes.io/prefer-for-scale-down"
 )
 
 var (
@@ -58,6 +63,27 @@ var (
 	varLogVolumeMount = corev1.VolumeMount{
 		Name:      varLogVolumeName,
 		MountPath: varLogVolumePath,
+	}
+
+	labelVolume = corev1.Volume{
+		Name: podInfoVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			DownwardAPI: &corev1.DownwardAPIVolumeSource{
+				Items: []corev1.DownwardAPIVolumeFile{
+					corev1.DownwardAPIVolumeFile{
+						Path: metadataLabelsName,
+						FieldRef: &corev1.ObjectFieldSelector{
+							FieldPath: fmt.Sprintf("%s['%s']", metadataLabelsPath, preferScaleDownLabel),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	labelVolumeMount = corev1.VolumeMount{
+		Name:      podInfoVolumeName,
+		MountPath: podInfoVolumePath,
 	}
 
 	internalVolume = corev1.Volume{
@@ -167,6 +193,8 @@ func makePodSpec(rev *v1alpha1.Revision, loggingConfig *logging.Config, tracingC
 	if observabilityConfig.EnableVarLogCollection {
 		podSpec.Volumes = append(podSpec.Volumes, internalVolume)
 	}
+
+	podSpec.Volumes = append(podSpec.Volumes, labelVolume)
 
 	return podSpec, nil
 }

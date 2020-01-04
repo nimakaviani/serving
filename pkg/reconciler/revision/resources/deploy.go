@@ -49,7 +49,7 @@ const (
 	podInfoVolumePath    = "/etc/podinfo"
 	metadataLabelsPath   = "metadata.labels"
 	metadataLabelsName   = "labels"
-	preferScaleDownLabel = "kubernetes.io/prefer-for-scale-down"
+	PreferScaleDownLabel = "kubernetes.io/prefer-for-scale-down"
 )
 
 var (
@@ -73,7 +73,7 @@ var (
 					corev1.DownwardAPIVolumeFile{
 						Path: metadataLabelsName,
 						FieldRef: &corev1.ObjectFieldSelector{
-							FieldPath: fmt.Sprintf("%s['%s']", metadataLabelsPath, preferScaleDownLabel),
+							FieldPath: fmt.Sprintf("%s['%s']", metadataLabelsPath, PreferScaleDownLabel),
 						},
 					},
 				},

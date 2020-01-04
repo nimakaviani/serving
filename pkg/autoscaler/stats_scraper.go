@@ -25,6 +25,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"sort"
+
 	av1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
 	"knative.dev/serving/pkg/apis/networking"
 	"knative.dev/serving/pkg/apis/serving"
@@ -61,6 +63,7 @@ var (
 type StatsScraper interface {
 	// Scrape scrapes the Revision queue metric endpoint.
 	Scrape() (Stat, error)
+	ScrapePodMetrics(int, int) ([]Stat, error)
 }
 
 // scrapeClient defines the interface for collecting Revision metrics for a given
@@ -131,23 +134,48 @@ func urlFromTarget(t, ns string) string {
 		t, ns, networking.AutoscalingQueueMetricsPort)
 }
 
-// Scrape calls the destination service then sends it
-// to the given stats channel.
-func (s *ServiceScraper) Scrape() (Stat, error) {
-	readyPodsCount, err := s.counter.ReadyCount()
-	if err != nil {
-		return emptyStat, ErrFailedGetEndpoints
+func (s *ServiceScraper) ScrapePodMetrics(readyCount, desiredScale int) ([]Stat, error) {
+	fmt.Printf(">> start scrape - readyCount: %d, desiredScale: %d\n", readyCount, desiredScale)
+	defer fmt.Println(">> end scrape")
+	minSampleSize := readyCount - desiredScale
+
+	// no plan to remove anything
+	if minSampleSize == 0 {
+		return nil, nil
 	}
 
-	if readyPodsCount == 0 {
-		return emptyStat, nil
+	sampleSize := populationMeanSampleSize(readyCount)
+	if sampleSize < minSampleSize {
+		sampleSize = minSampleSize
 	}
 
-	sampleSize := populationMeanSampleSize(readyPodsCount)
 	statCh := make(chan Stat, sampleSize)
-	scrapedPods := &sync.Map{}
 
+	err := s.doScrape(statCh, sampleSize)
+	if err != nil {
+		return nil, err
+	}
+
+	close(statCh)
+	var podInfo []Stat
+	for s := range statCh {
+		fmt.Printf("-->> stat for pod w/ name: %s\n", s.PodName)
+		podInfo = append(podInfo, s)
+	}
+	fmt.Printf(">> before removal candidates (%d): %#v\n", minSampleSize, podInfo[:minSampleSize])
+
+	sort.SliceStable(podInfo, func(i, j int) bool {
+		return podInfo[i].RequestCount+podInfo[i].ProxiedRequestCount < podInfo[j].RequestCount+podInfo[j].ProxiedRequestCount
+	})
+
+	fmt.Printf(">> after removal candidates (%d): %#v\n", minSampleSize, podInfo[:minSampleSize])
+	return podInfo[:minSampleSize], nil
+}
+
+func (s *ServiceScraper) doScrape(statCh chan Stat, sampleSize int) error {
+	scrapedPods := &sync.Map{}
 	grp := errgroup.Group{}
+
 	for i := 0; i < sampleSize; i++ {
 		grp.Go(func() error {
 			for tries := 1; ; tries++ {
@@ -167,10 +195,33 @@ func (s *ServiceScraper) Scrape() (Stat, error) {
 
 	// Return the inner error, if any.
 	if err := grp.Wait(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Scrape calls the destination service then sends it
+// to the given stats channel.
+func (s *ServiceScraper) Scrape() (Stat, error) {
+	readyPodsCount, err := s.counter.ReadyCount()
+	if err != nil {
+		return emptyStat, ErrFailedGetEndpoints
+	}
+
+	if readyPodsCount == 0 {
+		return emptyStat, nil
+	}
+
+	sampleSize := populationMeanSampleSize(readyPodsCount)
+	statCh := make(chan Stat, sampleSize)
+
+	err = s.doScrape(statCh, sampleSize)
+
+	if err != nil {
 		return emptyStat, fmt.Errorf("unsuccessful scrape, sampleSize=%d: %w", sampleSize, err)
 	}
-	close(statCh)
 
+	close(statCh)
 	var (
 		avgConcurrency        float64
 		avgProxiedConcurrency float64

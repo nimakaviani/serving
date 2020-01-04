@@ -104,6 +104,8 @@ type MetricClient interface {
 	// StableAndPanicRPS returns both the stable and the panic RPS
 	// for the given replica as of the given time.
 	StableAndPanicRPS(key types.NamespacedName, now time.Time) (float64, float64, error)
+
+	CandidatesForRemoval(key types.NamespacedName, readyCount, desiredScale int) ([]Stat, error)
 }
 
 // MetricCollector manages collection of metrics for many entities.
@@ -212,6 +214,18 @@ func (c *MetricCollector) StableAndPanicRPS(key types.NamespacedName, now time.T
 	}
 
 	return collection.StableAndPanicRPS(now)
+}
+
+func (c *MetricCollector) CandidatesForRemoval(key types.NamespacedName, readyCount, desiredScale int) ([]Stat, error) {
+	c.collectionsMutex.RLock()
+	defer c.collectionsMutex.RUnlock()
+
+	collection, exists := c.collections[key]
+	if !exists {
+		return nil, ErrNotScraping
+	}
+
+	return collection.scraper.ScrapePodMetrics(readyCount, desiredScale)
 }
 
 // collection represents the collection of metrics for one specific entity.

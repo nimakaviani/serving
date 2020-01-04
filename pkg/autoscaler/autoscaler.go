@@ -108,6 +108,38 @@ func New(
 }
 
 // Update reconfigures the UniScaler according to the DeciderSpec.
+func (a *Autoscaler) PrepareForRemoval(ctx context.Context, desiredScale int32) (map[string]struct{}, error) {
+	logger := logging.FromContext(ctx)
+	_, podCounter := a.currentSpecAndPC()
+
+	metricKey := types.NamespacedName{Namespace: a.namespace, Name: a.revision}
+	originalReadyPodsCount, err := podCounter.ReadyCount()
+
+	// If the error is NotFound, then presume 0.
+	if err != nil && !apierrors.IsNotFound(err) {
+		logger.Errorw("Failed to get Endpoints via K8S Lister", zap.Error(err))
+		return nil, err
+	}
+
+	if int(desiredScale) > originalReadyPodsCount {
+		return nil, nil
+	}
+
+	podStats, err := a.metricClient.CandidatesForRemoval(metricKey, originalReadyPodsCount, int(desiredScale))
+	if err != nil {
+		return nil, err
+	}
+
+	pods := make(map[string]struct{})
+	for _, p := range podStats {
+		logger.Infof(">> singlescaler: found pod for removal: %s", p.PodName)
+		pods[p.PodName] = struct{}{}
+	}
+
+	return pods, nil
+}
+
+// Update reconfigures the UniScaler according to the DeciderSpec.
 func (a *Autoscaler) Update(deciderSpec *DeciderSpec) error {
 	a.specMux.Lock()
 	defer a.specMux.Unlock()

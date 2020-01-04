@@ -47,6 +47,7 @@ import (
 type Reconciler struct {
 	*areconciler.Base
 	endpointsLister corev1listers.EndpointsLister
+	podLister       corev1listers.PodLister
 	deciders        resources.Deciders
 	scaler          *scaler
 }
@@ -148,8 +149,18 @@ func (c *Reconciler) reconcile(ctx context.Context, pa *pav1alpha1.PodAutoscaler
 		return err
 	}
 
+	logger.Infof(">> kpa: removalCandidates (%d): %#v", len(decider.Status.RemovalCandidatePods), decider.Status.RemovalCandidatePods)
+	if decider.Status.RemovalCandidatePods != nil {
+		err := c.scaler.MarkPodsForRemoval(ctx, c.podLister, decider.Status.RemovalCandidatePods, pa)
+		if err != nil {
+			logger.Errorf(">> error scaling taarget: %w", err)
+			return fmt.Errorf("error scaling target: %w", err)
+		}
+	}
+
 	// Get the appropriate current scale from the metric, and right size
 	// the scaleTargetRef based on it.
+	logger.Infof(">> kpa: proceeding to scale target")
 	want, err := c.scaler.Scale(ctx, pa, sks, decider.Status.DesiredScale)
 	if err != nil {
 		return fmt.Errorf("error scaling target: %w", err)

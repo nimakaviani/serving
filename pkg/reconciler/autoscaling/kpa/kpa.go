@@ -22,6 +22,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"knative.dev/pkg/apis/duck"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/ptr"
@@ -33,11 +34,16 @@ import (
 	"knative.dev/serving/pkg/reconciler/autoscaling/config"
 	"knative.dev/serving/pkg/reconciler/autoscaling/kpa/resources"
 	anames "knative.dev/serving/pkg/reconciler/autoscaling/resources/names"
+	rresources "knative.dev/serving/pkg/reconciler/revision/resources"
 	resourceutil "knative.dev/serving/pkg/resources"
+
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
@@ -149,21 +155,28 @@ func (c *Reconciler) reconcile(ctx context.Context, pa *pav1alpha1.PodAutoscaler
 		return err
 	}
 
+	// Get the appropriate current scale from the metric, and right size
+	// the scaleTargetRef based on it.
+	logger.Infof(">> kpa: proceeding to scale target")
+	want, ps, err := c.scaler.Scale(ctx, pa, sks, decider.Status.DesiredScale)
+	if err != nil {
+		return fmt.Errorf("error scaling target: %w", err)
+	}
+
 	logger.Infof(">> kpa: removalCandidates (%d): %#v", len(decider.Status.RemovalCandidatePods), decider.Status.RemovalCandidatePods)
 	if decider.Status.RemovalCandidatePods != nil {
-		err := c.scaler.MarkPodsForRemoval(ctx, c.podLister, decider.Status.RemovalCandidatePods, pa)
+		err := c.markPodsForRemoval(ctx, decider.Status.RemovalCandidatePods, pa, want)
 		if err != nil {
 			logger.Errorf(">> error scaling taarget: %w", err)
 			return fmt.Errorf("error scaling target: %w", err)
 		}
 	}
 
-	// Get the appropriate current scale from the metric, and right size
-	// the scaleTargetRef based on it.
-	logger.Infof(">> kpa: proceeding to scale target")
-	want, err := c.scaler.Scale(ctx, pa, sks, decider.Status.DesiredScale)
-	if err != nil {
-		return fmt.Errorf("error scaling target: %w", err)
+	if ps != nil {
+		_, err := c.scaler.ApplyScale(ctx, pa, want, ps)
+		if err != nil {
+			return fmt.Errorf("error scaling target: %w", err)
+		}
 	}
 
 	mode := nv1alpha1.SKSOperationModeServe
@@ -202,6 +215,73 @@ func (c *Reconciler) reconcile(ctx context.Context, pa *pav1alpha1.PodAutoscaler
 	}
 	logger.Infof("PA scale got=%d, want=%d, ebc=%d", got, want, decider.Status.ExcessBurstCapacity)
 	return computeStatus(pa, want, got)
+}
+
+func (c *Reconciler) markPodsForRemoval(ctx context.Context, removalCandidates map[string]struct{}, pa *pav1alpha1.PodAutoscaler, want int32) error {
+	logger := logging.FromContext(ctx)
+	logger.Info(">> kpa: start markPods for Removal")
+	defer logger.Info(">> kpa: end  markPods for Removal")
+
+	pods, err := c.podLister.Pods(pa.Namespace).List(labels.SelectorFromSet(labels.Set{serving.RevisionUID: pa.Labels[serving.RevisionUID]}))
+	if err != nil {
+		return err
+	}
+
+	podCounter := resourceutil.NewScopedEndpointsCounter(c.endpointsLister, pa.Namespace, pa.Status.MetricsServiceName)
+	readyCount, err := podCounter.ReadyCount()
+	if err != nil {
+		return err
+	}
+
+	count := int32(readyCount) - want
+	logger.Infof(">> kpa: count(%d) - readyCount(%d) - want(%d)", count, readyCount, want)
+	for _, p := range pods {
+		logger.Infof(">> kpa PodExam %s", p.ObjectMeta.Name)
+
+		if _, ok := removalCandidates[p.ObjectMeta.Name]; !ok {
+			continue
+		}
+
+		count--
+		if count < 0 {
+			break
+		}
+
+		logger.Infof(">> kpa: labeling pod %s", p.ObjectMeta.Name)
+		newP := p.DeepCopy()
+		newP.ObjectMeta.Labels[rresources.PreferScaleDownLabel] = "true"
+		patch, err := duck.CreatePatch(p, newP)
+		if err != nil {
+			return err
+		}
+
+		patchBytes, err := patch.MarshalJSON()
+		if err != nil {
+			return err
+		}
+
+		_, err = c.KubeClientSet.CoreV1().Pods(pa.Namespace).Patch(p.ObjectMeta.Name, types.JSONPatchType, patchBytes)
+		if err != nil {
+			return err
+		}
+
+	}
+
+	//TODO nimak: use the proper wait technique
+	for {
+		logger.Info(">> kpa: waiting for endpoints")
+		readyCount, err := podCounter.ReadyCount()
+		if err != nil {
+			return err
+		}
+
+		if int32(readyCount) == want {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	return nil
 }
 
 func (c *Reconciler) reconcileDecider(ctx context.Context, pa *pav1alpha1.PodAutoscaler, k8sSvc string) (*autoscaler.Decider, error) {

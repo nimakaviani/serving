@@ -32,7 +32,6 @@ import (
 	pav1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
 	"knative.dev/serving/pkg/apis/networking"
 	nv1a1 "knative.dev/serving/pkg/apis/networking/v1alpha1"
-	"knative.dev/serving/pkg/apis/serving"
 	"knative.dev/serving/pkg/network"
 	"knative.dev/serving/pkg/reconciler/autoscaling/config"
 	aresources "knative.dev/serving/pkg/reconciler/autoscaling/resources"
@@ -40,11 +39,8 @@ import (
 	"knative.dev/serving/pkg/resources"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
-	corev1listers "k8s.io/client-go/listers/core/v1"
 )
 
 const (
@@ -143,47 +139,6 @@ func applyBounds(min, max, x int32) int32 {
 	return x
 }
 
-func (ks *scaler) MarkPodsForRemoval(ctx context.Context, podLister corev1listers.PodLister, removalCandidates map[string]struct{}, pa *pav1alpha1.PodAutoscaler) error {
-	pods, err := podLister.Pods(pa.Namespace).List(labels.SelectorFromSet(labels.Set{serving.RevisionUID: pa.Labels[serving.RevisionUID]}))
-	if err != nil {
-		return err
-	}
-
-	logger := logging.FromContext(ctx)
-
-	for _, p := range pods {
-		if _, ok := removalCandidates[p.ObjectMeta.Name]; !ok {
-			continue
-		}
-
-		logger.Infof(">> kpscaler: labeling pod %s", p.ObjectMeta.Name)
-		newP := p.DeepCopy()
-		newP.ObjectMeta.Labels[rresources.PreferScaleDownLabel] = "true"
-		patch, err := duck.CreatePatch(p, newP)
-		if err != nil {
-			return err
-		}
-
-		patchBytes, err := patch.MarshalJSON()
-		if err != nil {
-			return err
-		}
-
-		gvr := schema.GroupVersionResource{
-			Group:    "",
-			Version:  "v1",
-			Resource: "Pod",
-		}
-
-		_, err = ks.dynamicClient.Resource(gvr).Namespace(p.Namespace).Patch(p.ObjectMeta.Name, types.JSONPatchType, patchBytes, metav1.PatchOptions{})
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func (ks *scaler) handleScaleToZero(ctx context.Context, pa *pav1alpha1.PodAutoscaler,
 	sks *nv1a1.ServerlessService, desiredScale int32) (int32, bool) {
 	if desiredScale != 0 {
@@ -269,7 +224,7 @@ func (ks *scaler) handleScaleToZero(ctx context.Context, pa *pav1alpha1.PodAutos
 	return desiredScale, true
 }
 
-func (ks *scaler) applyScale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, desiredScale int32,
+func (ks *scaler) ApplyScale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, desiredScale int32,
 	ps *pav1alpha1.PodScalable) (int32, error) {
 	logger := logging.FromContext(ctx)
 
@@ -300,12 +255,12 @@ func (ks *scaler) applyScale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, 
 }
 
 // Scale attempts to scale the given PA's target reference to the desired scale.
-func (ks *scaler) Scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *nv1a1.ServerlessService, desiredScale int32) (int32, error) {
+func (ks *scaler) Scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *nv1a1.ServerlessService, desiredScale int32) (int32, *pav1alpha1.PodScalable, error) {
 	logger := logging.FromContext(ctx)
 
 	if desiredScale < 0 && !pa.Status.IsActivating() {
 		logger.Debug("Metrics are not yet being collected.")
-		return desiredScale, nil
+		return desiredScale, nil, nil
 	}
 
 	min, max := pa.ScaleBounds()
@@ -316,12 +271,12 @@ func (ks *scaler) Scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *
 
 	desiredScale, shouldApplyScale := ks.handleScaleToZero(ctx, pa, sks, desiredScale)
 	if !shouldApplyScale {
-		return desiredScale, nil
+		return desiredScale, nil, nil
 	}
 
 	ps, err := resources.GetScaleResource(pa.Namespace, pa.Spec.ScaleTargetRef, ks.psInformerFactory)
 	if err != nil {
-		return desiredScale, fmt.Errorf("failed to get scale target %v: %w", pa.Spec.ScaleTargetRef, err)
+		return desiredScale, nil, fmt.Errorf("failed to get scale target %v: %w", pa.Spec.ScaleTargetRef, err)
 	}
 
 	currentScale := int32(1)
@@ -329,9 +284,9 @@ func (ks *scaler) Scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *
 		currentScale = *ps.Spec.Replicas
 	}
 	if desiredScale == currentScale {
-		return desiredScale, nil
+		return desiredScale, nil, nil
 	}
 
 	logger.Infof("Scaling from %d to %d", currentScale, desiredScale)
-	return ks.applyScale(ctx, pa, desiredScale, ps)
+	return desiredScale, ps, nil
 }

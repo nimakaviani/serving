@@ -163,8 +163,9 @@ func (c *Reconciler) reconcile(ctx context.Context, pa *pav1alpha1.PodAutoscaler
 		return fmt.Errorf("error scaling target: %w", err)
 	}
 
+	cfg := config.FromContext(ctx).Autoscaler
 	logger.Infof(">> kpa: removalCandidates (%d): %#v", len(decider.Status.RemovalCandidatePods), decider.Status.RemovalCandidatePods)
-	if decider.Status.RemovalCandidatePods != nil {
+	if decider.Status.RemovalCandidatePods != nil  && cfg.EnableGracefulScaledown {
 		err := c.markPodsForRemoval(ctx, decider.Status.RemovalCandidatePods, pa, want)
 		if err != nil {
 			logger.Errorf(">> error scaling taarget: %w", err)

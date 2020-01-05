@@ -62,16 +62,17 @@ func MakeDecider(ctx context.Context, pa *v1alpha1.PodAutoscaler, config *autosc
 	return &autoscaler.Decider{
 		ObjectMeta: *pa.ObjectMeta.DeepCopy(),
 		Spec: autoscaler.DeciderSpec{
-			TickInterval:        config.TickInterval,
-			MaxScaleUpRate:      config.MaxScaleUpRate,
-			MaxScaleDownRate:    config.MaxScaleDownRate,
-			ScalingMetric:       pa.Metric(),
-			TargetValue:         target,
-			TotalValue:          total,
-			TargetBurstCapacity: tbc,
-			PanicThreshold:      panicThreshold,
-			StableWindow:        resources.StableWindow(pa, config),
-			ServiceName:         svc,
+			TickInterval:            config.TickInterval,
+			MaxScaleUpRate:          config.MaxScaleUpRate,
+			MaxScaleDownRate:        config.MaxScaleDownRate,
+			EnableGracefulScaledown: config.EnableGracefulScaledown,
+			ScalingMetric:           pa.Metric(),
+			TargetValue:             target,
+			TotalValue:              total,
+			TargetBurstCapacity:     tbc,
+			PanicThreshold:          panicThreshold,
+			StableWindow:            resources.StableWindow(pa, config),
+			ServiceName:             svc,
 		},
 	}
 }

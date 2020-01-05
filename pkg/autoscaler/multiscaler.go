@@ -60,6 +60,8 @@ type DeciderSpec struct {
 	StableWindow time.Duration
 	// The name of the k8s service for pod information.
 	ServiceName string
+
+	EnableGracefulScaledown bool
 }
 
 // DeciderStatus is the current scale recommendation.
@@ -323,10 +325,17 @@ func (m *MultiScaler) tickScaler(ctx context.Context, scaler UniScaler, runner *
 		return
 	}
 
-	pods, err := scaler.PrepareForRemoval(ctx, desiredScale)
-	if err != nil {
-		logger.Errorf("Cannot scale: %w", err)
-		return
+	var (
+		pods map[string]struct{}
+		err  error
+	)
+
+	if runner.decider.Spec.EnableGracefulScaledown {
+		pods, err = scaler.PrepareForRemoval(ctx, desiredScale)
+		if err != nil {
+			logger.Errorf("Cannot scale: %w", err)
+			return
+		}
 	}
 
 	logger.Infof(">> multiscaler: updating deciderSpec (%d): %#v", len(pods), pods)

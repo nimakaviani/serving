@@ -153,6 +153,18 @@ func sks(ns, n string, so ...SKSOption) *nv1a1.ServerlessService {
 	return s
 }
 
+func pod(ns, n string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      n,
+			Labels: map[string]string{
+				serving.RevisionUID: "",
+			},
+		},
+	}
+}
+
 func markOld(pa *asv1a1.PodAutoscaler) {
 	pa.Status.Conditions[0].LastTransitionTime.Inner.Time = time.Now().Add(-1 * time.Hour)
 }
@@ -262,7 +274,9 @@ func TestReconcile(t *testing.T) {
 	defaultEndpoints := makeSKSPrivateEndpoints(1, testNamespace, testRevision)
 	zeroEndpoints := makeSKSPrivateEndpoints(0, testNamespace, testRevision)
 
-	deciderKey := struct{}{}
+	type contextKey string
+	deciderKey := contextKey("deciderKey")
+	gracefuleScaleDownConfigKey := contextKey("gracefulScaleDownKey")
 	retryAttempted := false
 
 	// Note: due to how KPA reconciler works we are dependent on the
@@ -397,6 +411,36 @@ func TestReconcile(t *testing.T) {
 			Name:  deployName,
 			Patch: []byte(`[{"op":"add","path":"/spec/replicas","value":11}]`),
 		}},
+		// }, {
+		// 	Name: "scale down deployment",
+		// 	Key:  key,
+		// 	Ctx:  context.WithValue(context.Background(), gracefuleScaleDownConfigKey, struct{}{}),
+		// 	Objects: []runtime.Object{
+		// 		activeKPAMinScale(overscale, defaultScale),
+		// 		defaultSKS,
+		// 		metric(testNamespace, testRevision),
+		// 		overscaledEndpoints,
+		// 		overscaledDeployment,
+		// 	},
+		// 	WantCreates: []runtime.Object{
+		// 		pod(testNamespace, "pod-1"),
+		// 	},
+		// 	WantPatches: []clientgotesting.PatchActionImpl{
+		// 		{
+		// 			ActionImpl: clientgotesting.ActionImpl{
+		// 				Namespace: testNamespace,
+		// 			},
+		// 			Name:  deployName,
+		// 			Patch: []byte(`[{"op":"replace","path":"/spec/replicas","value":11}]`),
+		// 		},
+		// 		{
+		// 			ActionImpl: clientgotesting.ActionImpl{
+		// 				Namespace: testNamespace,
+		// 			},
+		// 			Name:  "pod-1",
+		// 			Patch: []byte(`[{"op":"add","path":"/metadata/labels/autoscaling.knative.dev~1prefer-for-scale-down","value":"true"}]`),
+		// 		},
+		// 	},
 	}, {
 		Name: "scale up deployment failure",
 		Key:  key,
@@ -972,18 +1016,30 @@ func TestReconcile(t *testing.T) {
 	}}
 
 	table.Test(t, MakeFactory(func(ctx context.Context, listers *Listers, cmw configmap.Watcher) controller.Reconciler {
-		retryAttempted = false
+		// retryAttempted = false
 		ctx = podscalable.WithDuck(ctx)
 
 		fakeDeciders := newTestDeciders()
 		// TODO(vagababov): see if we can get rid of the static piece of configuration and
 		// constant namespace and revision names.
 
+		var removalCandidates []string
+		defaultConfig := defaultConfig()
+		if gsd := ctx.Value(gracefuleScaleDownConfigKey); gsd != nil {
+			defaultConfig.Autoscaler.EnableGracefulScaledown = true
+			removalCandidates = []string{"pod-1"}
+			_, err := fakekubeclient.Get(ctx).CoreV1().Pods(testNamespace).Create(pod(testNamespace, "pod-1"))
+			if err != nil {
+				t.Errorf("Failed %v", err)
+			}
+		}
+
 		// Make new decider if it's not in the context
 		if d := ctx.Value(deciderKey); d == nil {
 			decider := resources.MakeDecider(
-				ctx, kpa(testNamespace, testRevision), defaultConfig().Autoscaler, "trying-hard-to-care-in-this-test")
+				ctx, kpa(testNamespace, testRevision), defaultConfig.Autoscaler, "trying-hard-to-care-in-this-test")
 			decider.Status.DesiredScale = defaultScale
+			decider.Status.RemovalCandidates = removalCandidates
 			decider.Generation = 2112
 			fakeDeciders.Create(ctx, decider)
 		} else {
@@ -1000,7 +1056,7 @@ func TestReconcile(t *testing.T) {
 				SKSLister:         listers.GetServerlessServiceLister(),
 				ServiceLister:     listers.GetK8sServiceLister(),
 				MetricLister:      listers.GetMetricLister(),
-				ConfigStore:       &testConfigStore{config: defaultConfig()},
+				ConfigStore:       &testConfigStore{config: defaultConfig},
 				PSInformerFactory: psf,
 			},
 			endpointsLister: listers.GetEndpointsLister(),

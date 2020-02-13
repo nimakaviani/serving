@@ -228,8 +228,13 @@ func (ks *scaler) handleScaleToZero(ctx context.Context, pa *pav1alpha1.PodAutos
 	return desiredScale, true
 }
 
-func (ks *scaler) applyScale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, desiredScale int32,
-	ps *pav1alpha1.PodScalable) error {
+func (ks *scaler) Apply(ctx context.Context, pa *pav1alpha1.PodAutoscaler, ps *pav1alpha1.PodScalable, desiredScale int32) error {
+	// if no PodScalable is provided, return without scaling.
+	// This happens when the desiredScale == currentScale
+	if ps == nil {
+		return nil
+	}
+
 	logger := logging.FromContext(ctx)
 
 	gvr, name, err := resources.ScaleResourceArguments(pa.Spec.ScaleTargetRef)
@@ -259,12 +264,12 @@ func (ks *scaler) applyScale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, 
 }
 
 // Scale attempts to scale the given PA's target reference to the desired scale.
-func (ks *scaler) Scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *nv1a1.ServerlessService, desiredScale int32) (int32, error) {
+func (ks *scaler) Scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *nv1a1.ServerlessService, desiredScale int32) (int32, *pav1alpha1.PodScalable, error) {
 	logger := logging.FromContext(ctx)
 
 	if desiredScale < 0 && !pa.Status.IsActivating() {
 		logger.Debug("Metrics are not yet being collected.")
-		return desiredScale, nil
+		return desiredScale, nil, nil
 	}
 
 	min, max := pa.ScaleBounds()
@@ -275,12 +280,12 @@ func (ks *scaler) Scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *
 
 	desiredScale, shouldApplyScale := ks.handleScaleToZero(ctx, pa, sks, desiredScale)
 	if !shouldApplyScale {
-		return desiredScale, nil
+		return desiredScale, nil, nil
 	}
 
 	ps, err := resources.GetScaleResource(pa.Namespace, pa.Spec.ScaleTargetRef, ks.psInformerFactory)
 	if err != nil {
-		return desiredScale, fmt.Errorf("failed to get scale target %v: %w", pa.Spec.ScaleTargetRef, err)
+		return desiredScale, nil, fmt.Errorf("failed to get scale target %v: %w", pa.Spec.ScaleTargetRef, err)
 	}
 
 	currentScale := int32(1)
@@ -288,9 +293,8 @@ func (ks *scaler) Scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *
 		currentScale = *ps.Spec.Replicas
 	}
 	if desiredScale == currentScale {
-		return desiredScale, nil
+		return desiredScale, nil, nil
 	}
 
-	logger.Infof("Scaling from %d to %d", currentScale, desiredScale)
-	return desiredScale, ks.applyScale(ctx, pa, desiredScale, ps)
+	return desiredScale, ps, nil
 }

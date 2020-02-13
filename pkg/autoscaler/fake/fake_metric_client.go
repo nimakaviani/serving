@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
 	kubeinformers "k8s.io/client-go/informers"
 	fakek8s "k8s.io/client-go/kubernetes/fake"
 )
@@ -50,6 +51,7 @@ type MetricClient struct {
 	StableRPS         float64
 	PanicRPS          float64
 	ErrF              func(key types.NamespacedName, now time.Time) error
+	RemovalCandidates []string
 }
 
 // A ManualTickProvider holds a channel that delivers `ticks' of a clock at intervals.
@@ -83,6 +85,11 @@ func (t *MetricClient) StableAndPanicRPS(key types.NamespacedName, now time.Time
 		err = t.ErrF(key, now)
 	}
 	return t.StableRPS, t.PanicRPS, err
+}
+
+// CandidatesForRemoval returns Stats for pods which are candidate for removal
+func (t *MetricClient) CandidatesForRemoval(key types.NamespacedName, readyCount, desiredScale int) ([]string, error) {
+	return t.RemovalCandidates, nil
 }
 
 // StaticMetricClient returns stable/panic concurrency and RPS with static value, i.e. 10.

@@ -54,7 +54,11 @@ spec:
         - name: GOGC
           value: "500"
         - name: SCRAPER_PORT
-          value: 8101
+          value: "8101"
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         - name: POD_NAME
           valueFrom:
             fieldRef:

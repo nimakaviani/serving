@@ -94,7 +94,7 @@ type ServiceScraper struct {
 // NewServiceScraper creates a new StatsScraper for the Revision which
 // the given Metric is responsible for.
 func NewServiceScraper(metric *av1alpha1.Metric, counter resources.EndpointsCounter) (*ServiceScraper, error) {
-	sClient, err := newHTTPScrapeClient(cacheDisabledClient)
+	sClient, err := NewHTTPScrapeClient(cacheDisabledClient)
 	if err != nil {
 		return nil, err
 	}

@@ -30,7 +30,7 @@ type httpScrapeClient struct {
 	httpClient *http.Client
 }
 
-func newHTTPScrapeClient(httpClient *http.Client) (*httpScrapeClient, error) {
+func NewHTTPScrapeClient(httpClient *http.Client) (*httpScrapeClient, error) {
 	if httpClient == nil {
 		return nil, errors.New("HTTP client must not be nil")
 	}

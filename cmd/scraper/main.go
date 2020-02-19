@@ -37,7 +37,9 @@ import (
 
 	"sync"
 
+	"github.com/prometheus/client_golang/prometheus"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
+	"knative.dev/serving/cmd/scraper/stats"
 	"knative.dev/serving/pkg/apis/networking"
 	"knative.dev/serving/pkg/apis/serving"
 	"knative.dev/serving/pkg/autoscaler"
@@ -50,14 +52,9 @@ var (
 	kubeconfig = flag.String("kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
 )
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	// revisionUID := r.URL.Query()["revisionUID"]
-
-}
-
-func buildServer(port string, logger *zap.SugaredLogger, scraper *metricsScraper) *http.Server {
+func buildServer(port string, logger *zap.SugaredLogger, reporter *stats.PrometheusStatsReporter) *http.Server {
 	scraperMux := http.NewServeMux()
-	scraperMux.HandleFunc("/", handler)
+	scraperMux.Handle("/", reporter.Handler())
 	return &http.Server{
 		Addr:    ":" + port,
 		Handler: scraperMux,
@@ -73,15 +70,16 @@ type config struct {
 	ConfigLoggingName string `split_words:"true" required:"true"`
 }
 
-type revisionPod struct {
-	revisionUID string
-	podIP       string
-	podName     string
+func revisionPodKey(revisionUID, podName string) string {
+	return fmt.Sprintf("%s-%s", revisionUID, podName)
 }
 
 type metricsScraper struct {
-	node  string
-	stats *sync.Map
+	node            string
+	reporter        *stats.PrometheusStatsReporter
+	reportingPeriod time.Duration
+	statRecorders   sync.Map
+	registry        *prometheus.Registry
 }
 
 const (
@@ -129,26 +127,31 @@ func main() {
 		logger.Fatalw("Failed to start informers", zap.Error(err))
 	}
 
-	s := &metricsScraper{node: env.NodeName}
+	s := &metricsScraper{
+		node:            env.NodeName,
+		reportingPeriod: 1 * time.Second,
+		statRecorders:   sync.Map{},
+		reporter:        stats.NewPrometheusStatsReporter(),
+		registry:        prometheus.NewRegistry(),
+	}
 	go s.run(ctx, logger)
 
-	server := buildServer(env.ScraperPort, logger, s)
+	server := buildServer(env.ScraperPort, logger, s.reporter)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Errorf("starting server failed %v", err)
 	}
 }
 
 func (s *metricsScraper) run(ctx context.Context, logger *zap.SugaredLogger) {
-	ticker := time.NewTicker(1 * time.Minute)
+	ticker := time.NewTicker(s.reportingPeriod)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			stat, err := pollMetricsData(ctx, logger, s.node)
+			err := s.pollMetricsData(ctx, logger, s.node)
 			if err != nil {
 				logger.Errorf("Failed scraping %v", err)
 			}
-			s.stats = stat
 		case <-ctx.Done():
 			return
 		}
@@ -162,47 +165,67 @@ func flush(logger *zap.SugaredLogger) {
 	metrics.FlushExporter()
 }
 
-func pollMetricsData(ctx context.Context, logger *zap.SugaredLogger, nodeName string) (*sync.Map, error) {
+func (s *metricsScraper) pollMetricsData(ctx context.Context, logger *zap.SugaredLogger, nodeName string) error {
 	kubeClient := kubeclient.Get(ctx)
 	podList, err := kubeClient.CoreV1().Pods("").List(metav1.ListOptions{
 		FieldSelector: "spec.nodeName=" + nodeName,
+		LabelSelector: "serving.knative.dev/service",
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	sClient, err := autoscaler.NewHTTPScrapeClient(cacheDisabledClient)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	podStat := sync.Map{}
 	eg := errgroup.Group{}
 	for _, p := range podList.Items {
+		p := p
 		eg.Go(func() error {
-			p := p
-			podName, podIP := p.ObjectMeta.Name, p.Status.PodIP
-			logger.Infof("scraping data for pod: %s (%s)", podName, podIP)
+			podIP := p.Status.PodIP
 			stat, err := sClient.Scrape(urlFromTarget(podIP))
 			if err != nil {
 				return err
 			}
 
-			key := revisionPod{
-				podName:     podName,
-				podIP:       podIP,
-				revisionUID: p.ObjectMeta.Labels[serving.RevisionUID],
+			podNamespace := p.ObjectMeta.Namespace
+			podName := p.ObjectMeta.Namespace
+			podConfig, podRevision := p.ObjectMeta.Labels[serving.ConfigurationLabelKey], p.ObjectMeta.Labels[serving.RevisionLabelKey]
+			podRevisionUID := p.ObjectMeta.Labels[serving.RevisionUID]
+
+			podRevisionKey := revisionPodKey(podRevisionUID, podName)
+			logger.Infof("scraping data for pod: %s: %#v", podRevisionKey, stat)
+
+			var recorder *stats.PrometheusStatsRecorder
+			if val, ok := s.statRecorders.Load(podRevisionKey); !ok {
+				recorder, err := stats.NewPrometheusStatsRecorder(
+					podNamespace, podConfig, podRevision, podName, s.reportingPeriod, s.registry,
+				)
+				if err != nil {
+					return err
+				}
+				s.statRecorders.Store(podRevisionKey, recorder)
+			} else {
+				recorder = val.(*stats.PrometheusStatsRecorder)
 			}
-			podStat.Store(key, stat)
+
+			recorder.Report(
+				stat.AverageConcurrentRequests,
+				stat.AverageProxiedConcurrentRequests,
+				stat.RequestCount,
+				stat.ProxiedRequestCount,
+			)
 			return nil
 		})
 	}
 
 	if err := eg.Wait(); err != nil {
-		return nil, err
+		return err
 	}
 
-	return &podStat, nil
+	return nil
 }
 
 // cacheDisabledClient is a http client with cache disabled. It is shared by

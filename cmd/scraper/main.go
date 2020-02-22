@@ -37,7 +37,6 @@ import (
 
 	"sync"
 
-	"github.com/prometheus/client_golang/prometheus"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
 	"knative.dev/serving/cmd/scraper/stats"
 	"knative.dev/serving/pkg/apis/networking"
@@ -50,6 +49,10 @@ var (
 	masterURL = flag.String("master", "", "The address of the Kubernetes API server. "+
 		"Overrides any value in kubeconfig. Only required if out-of-cluster.")
 	kubeconfig = flag.String("kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
+)
+
+const (
+	reportingPeriod = 1 * time.Second
 )
 
 func buildServer(port string, logger *zap.SugaredLogger, reporter *stats.PrometheusStatsReporter) *http.Server {
@@ -75,11 +78,9 @@ func revisionPodKey(revisionUID, podName string) string {
 }
 
 type metricsScraper struct {
-	node            string
-	reporter        *stats.PrometheusStatsReporter
-	reportingPeriod time.Duration
-	statRecorders   sync.Map
-	registry        *prometheus.Registry
+	node          string
+	reporter      *stats.PrometheusStatsReporter
+	statRecorders sync.Map
 }
 
 const (
@@ -127,12 +128,15 @@ func main() {
 		logger.Fatalw("Failed to start informers", zap.Error(err))
 	}
 
+	reporter, err := stats.NewPrometheusStatsReporter(env.NodeName, reportingPeriod)
+	if err != nil {
+		logger.Fatalw("Failed creating the reporter: %w", err)
+	}
+
 	s := &metricsScraper{
-		node:            env.NodeName,
-		reportingPeriod: 1 * time.Second,
-		statRecorders:   sync.Map{},
-		reporter:        stats.NewPrometheusStatsReporter(),
-		registry:        prometheus.NewRegistry(),
+		node:          env.NodeName,
+		statRecorders: sync.Map{},
+		reporter:      reporter,
 	}
 	go s.run(ctx, logger)
 
@@ -143,7 +147,7 @@ func main() {
 }
 
 func (s *metricsScraper) run(ctx context.Context, logger *zap.SugaredLogger) {
-	ticker := time.NewTicker(s.reportingPeriod)
+	ticker := time.NewTicker(reportingPeriod)
 	defer ticker.Stop()
 	for {
 		select {
@@ -191,7 +195,7 @@ func (s *metricsScraper) pollMetricsData(ctx context.Context, logger *zap.Sugare
 			}
 
 			podNamespace := p.ObjectMeta.Namespace
-			podName := p.ObjectMeta.Namespace
+			podName := p.ObjectMeta.Name
 			podConfig, podRevision := p.ObjectMeta.Labels[serving.ConfigurationLabelKey], p.ObjectMeta.Labels[serving.RevisionLabelKey]
 			podRevisionUID := p.ObjectMeta.Labels[serving.RevisionUID]
 
@@ -200,9 +204,7 @@ func (s *metricsScraper) pollMetricsData(ctx context.Context, logger *zap.Sugare
 
 			var recorder *stats.PrometheusStatsRecorder
 			if val, ok := s.statRecorders.Load(podRevisionKey); !ok {
-				recorder, err := stats.NewPrometheusStatsRecorder(
-					podNamespace, podConfig, podRevision, podName, s.reportingPeriod, s.registry,
-				)
+				recorder, err = stats.NewPrometheusStatsRecorder(podNamespace, podConfig, podRevision, podName, s.reporter)
 				if err != nil {
 					return err
 				}

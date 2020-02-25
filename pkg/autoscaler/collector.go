@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"knative.dev/pkg/logging/logkey"
 	av1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
+	"knative.dev/serving/pkg/apis/serving"
 	"knative.dev/serving/pkg/autoscaler/aggregation"
 )
 
@@ -60,6 +61,8 @@ type Stat struct {
 	// are contributing to the metrics.
 	PodName string
 
+	RevisionName string
+
 	// Average number of requests currently being handled by this pod.
 	AverageConcurrentRequests float64
 
@@ -76,7 +79,10 @@ type Stat struct {
 	ProcessUptime float64
 }
 
-var emptyStat = Stat{}
+var (
+	emptyStat     = Stat{}
+	emptyBulkStat = []Stat{}
+)
 
 // StatMessage wraps a Stat with identifying information so it can be routed
 // to the correct receiver.
@@ -283,7 +289,7 @@ func newCollection(metric *av1alpha1.Metric, scraper StatsScraper, tickFactory f
 				scrapeTicker.Stop()
 				return
 			case <-scrapeTicker.C:
-				stat, err := c.getScraper().Scrape(c.currentMetric().Spec.StableWindow)
+				stats, err := c.getScraper().BulkScrape(c.currentMetric().Spec.StableWindow)
 				if err != nil {
 					copy := metric.DeepCopy()
 					switch {
@@ -297,8 +303,12 @@ func newCollection(metric *av1alpha1.Metric, scraper StatsScraper, tickFactory f
 					logger.Errorw("Failed to scrape metrics", zap.Error(err))
 					c.updateMetric(copy)
 				}
-				if stat != emptyStat {
-					c.record(stat)
+
+				for _, stat := range stats {
+					if stat != emptyStat && stat.RevisionName == metric.ObjectMeta.Labels[serving.RevisionLabelKey] {
+						println(">> recording stat for: ", stat.RevisionName, stat.PodName, stat.RequestCount, stat.ProxiedRequestCount)
+						c.record(stat)
+					}
 				}
 			}
 		}

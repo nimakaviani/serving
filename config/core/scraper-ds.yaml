@@ -19,6 +19,7 @@ metadata:
   namespace: knative-serving
   labels:
     knative.dev/release: devel
+    knative.dev/scraper: devel
 spec:
   updateStrategy:
     type: RollingUpdate
@@ -34,6 +35,7 @@ spec:
         app: scraper
         role: scraper
         knative.dev/release: devel
+        knative.dev/scraper: devel
     spec:
       serviceAccountName: controller
       containers:
@@ -96,18 +98,3 @@ spec:
       # timeoutSeconds property to avoid servicing events disrupting
       # connections.
       terminationGracePeriodSeconds: 300
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: scraper-service
-  namespace: knative-serving
-spec:
-  type: NodePort
-  selector:
-    app: scraper
-  ports:
-    - protocol: TCP
-      port: 8101
-      targetPort: 8101
-

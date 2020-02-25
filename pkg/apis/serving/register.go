@@ -23,6 +23,8 @@ const (
 	// GroupNamePrefix is the prefix for label key and annotation key
 	GroupNamePrefix = GroupName + "/"
 
+	ScraperLabelKey = GroupName + "/scraper"
+
 	// ConfigurationLabelKey is the label key attached to a Revision indicating by
 	// which Configuration it is created.
 	ConfigurationLabelKey = GroupName + "/configuration"

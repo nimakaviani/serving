@@ -35,6 +35,7 @@ import (
 	"k8s.io/client-go/rest"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
 	endpointsinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/endpoints"
+	podsinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/pod"
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/injection"
@@ -134,8 +135,9 @@ func main() {
 		profilingHandler.UpdateFromConfigMap)
 
 	endpointsInformer := endpointsinformer.Get(ctx)
+	podsInformer := podsinformer.Get(ctx)
 
-	collector := autoscaler.NewMetricCollector(statsScraperFactoryFunc(endpointsInformer.Lister()), logger)
+	collector := autoscaler.NewMetricCollector(statsScraperFactoryFunc(podsInformer.Lister(), endpointsInformer.Lister()), logger)
 	customMetricsAdapter.WithCustomMetrics(autoscaler.NewMetricProvider(collector))
 
 	// Set up scalers.
@@ -213,11 +215,11 @@ func uniScalerFactoryFunc(endpointsInformer corev1informers.EndpointsInformer,
 	}
 }
 
-func statsScraperFactoryFunc(endpointsLister corev1listers.EndpointsLister) autoscaler.StatsScraperFactory {
+func statsScraperFactoryFunc(podsLister corev1listers.PodLister, endpointsLister corev1listers.EndpointsLister) autoscaler.StatsScraperFactory {
 	return func(metric *av1alpha1.Metric) (autoscaler.StatsScraper, error) {
 		podCounter := resources.NewScopedEndpointsCounter(
 			endpointsLister, metric.Namespace, metric.Spec.ScrapeTarget)
-		return autoscaler.NewServiceScraper(metric, podCounter)
+		return autoscaler.NewServiceScraper(podsLister, metric, podCounter)
 	}
 }
 

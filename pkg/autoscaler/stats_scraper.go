@@ -25,6 +25,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"k8s.io/apimachinery/pkg/labels"
+	corev1listers "k8s.io/client-go/listers/core/v1"
 	av1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
 	"knative.dev/serving/pkg/apis/networking"
 	"knative.dev/serving/pkg/apis/serving"
@@ -62,6 +64,7 @@ type StatsScraper interface {
 	// Scrape scrapes the Revision queue metric endpoint. The duration is used
 	// to cutoff young pods, whose stats might skew lower.
 	Scrape(time.Duration) (Stat, error)
+	BulkScrape(time.Duration) ([]Stat, error)
 }
 
 // scrapeClient defines the interface for collecting Revision metrics for a given
@@ -69,6 +72,7 @@ type StatsScraper interface {
 type scrapeClient interface {
 	// Scrape scrapes the given URL.
 	Scrape(url string) (Stat, error)
+	BulkScrape(url string) ([]Stat, error)
 }
 
 // cacheDisabledClient is a http client with cache disabled. It is shared by
@@ -86,22 +90,24 @@ var cacheDisabledClient = &http.Client{
 // https://kubernetes.io/docs/concepts/services-networking/network-policies/
 // for details.
 type ServiceScraper struct {
-	sClient scrapeClient
-	counter resources.EndpointsCounter
-	url     string
+	podsLister corev1listers.PodLister
+	sClient    scrapeClient
+	counter    resources.EndpointsCounter
+	url        string
 }
 
 // NewServiceScraper creates a new StatsScraper for the Revision which
 // the given Metric is responsible for.
-func NewServiceScraper(metric *av1alpha1.Metric, counter resources.EndpointsCounter) (*ServiceScraper, error) {
+func NewServiceScraper(podsLister corev1listers.PodLister, metric *av1alpha1.Metric, counter resources.EndpointsCounter) (*ServiceScraper, error) {
 	sClient, err := NewHTTPScrapeClient(cacheDisabledClient)
 	if err != nil {
 		return nil, err
 	}
-	return newServiceScraperWithClient(metric, counter, sClient)
+	return newServiceScraperWithClient(podsLister, metric, counter, sClient)
 }
 
 func newServiceScraperWithClient(
+	podsLister corev1listers.PodLister,
 	metric *av1alpha1.Metric,
 	counter resources.EndpointsCounter,
 	sClient scrapeClient) (*ServiceScraper, error) {
@@ -120,9 +126,10 @@ func newServiceScraperWithClient(
 	}
 
 	return &ServiceScraper{
-		sClient: sClient,
-		counter: counter,
-		url:     urlFromTarget(metric.Spec.ScrapeTarget, metric.ObjectMeta.Namespace),
+		sClient:    sClient,
+		podsLister: podsLister,
+		counter:    counter,
+		url:        urlFromTarget(metric.Spec.ScrapeTarget, metric.ObjectMeta.Namespace),
 	}, nil
 }
 
@@ -130,6 +137,48 @@ func urlFromTarget(t, ns string) string {
 	return fmt.Sprintf(
 		"http://%s.%s:%d/metrics",
 		t, ns, networking.AutoscalingQueueMetricsPort)
+}
+
+// Scrape calls the destination service then sends it
+// to the given stats channel.
+func (s *ServiceScraper) BulkScrape(window time.Duration) ([]Stat, error) {
+	println(">> bulk scrape ...")
+	pods, err := s.podsLister.Pods("knative-serving").List(labels.SelectorFromSet(labels.Set{
+		"knative.dev/scraper": "devel",
+	}))
+	if err != nil {
+		return nil, err
+	}
+
+	println(">> len(pods)", len(pods))
+
+	stats := []Stat{}
+	mux := sync.Mutex{}
+	grp := errgroup.Group{}
+	for _, p := range pods {
+		p := p
+		grp.Go(func() error {
+			// TODO nimak: fix the port here
+			url := fmt.Sprintf("http://%s:%s/", p.Status.PodIP, "8101")
+			fmt.Printf(">> scrape-url: %s\n", url)
+			stat, err := s.tryBulkScrape(url)
+			if err != nil {
+				fmt.Printf("error scraping %s: %v\n", url, err)
+				return err
+			}
+
+			mux.Lock()
+			defer mux.Unlock()
+			stats = append(stats, stat...)
+
+			return nil
+		})
+	}
+
+	if err := grp.Wait(); err != nil {
+		return nil, err
+	}
+	return stats, nil
 }
 
 // Scrape calls the destination service then sends it
@@ -262,4 +311,8 @@ func (s *ServiceScraper) tryScrape(scrapedPods *sync.Map) (Stat, error) {
 	}
 
 	return stat, nil
+}
+
+func (s *ServiceScraper) tryBulkScrape(url string) ([]Stat, error) {
+	return s.sClient.BulkScrape(url)
 }

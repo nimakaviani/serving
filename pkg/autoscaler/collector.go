@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"knative.dev/pkg/logging/logkey"
 	av1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
-	"knative.dev/serving/pkg/apis/serving"
 	"knative.dev/serving/pkg/autoscaler/aggregation"
 )
 
@@ -117,8 +116,8 @@ type MetricClient interface {
 type MetricCollector struct {
 	logger *zap.SugaredLogger
 
-	statsScraperFactory StatsScraperFactory
-	tickProvider        func(time.Duration) *time.Ticker
+	serviceScraper *ServiceScraper
+	tickProvider   func(time.Duration) *time.Ticker
 
 	collections      map[types.NamespacedName]*collection
 	collectionsMutex sync.RWMutex
@@ -128,12 +127,12 @@ var _ Collector = (*MetricCollector)(nil)
 var _ MetricClient = (*MetricCollector)(nil)
 
 // NewMetricCollector creates a new metric collector.
-func NewMetricCollector(statsScraperFactory StatsScraperFactory, logger *zap.SugaredLogger) *MetricCollector {
+func NewMetricCollector(serviceScraper *ServiceScraper, logger *zap.SugaredLogger) *MetricCollector {
 	return &MetricCollector{
-		logger:              logger,
-		collections:         make(map[types.NamespacedName]*collection),
-		statsScraperFactory: statsScraperFactory,
-		tickProvider:        time.NewTicker,
+		logger:         logger,
+		collections:    make(map[types.NamespacedName]*collection),
+		serviceScraper: serviceScraper,
+		tickProvider:   time.NewTicker,
 	}
 }
 
@@ -141,17 +140,13 @@ func NewMetricCollector(statsScraperFactory StatsScraperFactory, logger *zap.Sug
 // it already exist.
 // Map access optimized via double-checked locking.
 func (c *MetricCollector) CreateOrUpdate(metric *av1alpha1.Metric) error {
-	scraper, err := c.statsScraperFactory(metric)
-	if err != nil {
-		return err
-	}
 	key := types.NamespacedName{Namespace: metric.Namespace, Name: metric.Name}
 
 	c.collectionsMutex.RLock()
 	collection, exists := c.collections[key]
 	c.collectionsMutex.RUnlock()
 	if exists {
-		collection.updateScraper(scraper)
+		collection.updateScraper(c.serviceScraper)
 		collection.updateMetric(metric)
 		return nil
 	}
@@ -161,12 +156,12 @@ func (c *MetricCollector) CreateOrUpdate(metric *av1alpha1.Metric) error {
 
 	collection, exists = c.collections[key]
 	if exists {
-		collection.updateScraper(scraper)
+		collection.updateScraper(c.serviceScraper)
 		collection.updateMetric(metric)
 		return nil
 	}
 
-	c.collections[key] = newCollection(metric, scraper, c.tickProvider, c.logger)
+	c.collections[key] = newCollection(metric, c.serviceScraper, c.tickProvider, c.logger)
 	return nil
 }
 
@@ -289,7 +284,7 @@ func newCollection(metric *av1alpha1.Metric, scraper StatsScraper, tickFactory f
 				scrapeTicker.Stop()
 				return
 			case <-scrapeTicker.C:
-				stats, err := c.getScraper().BulkScrape(c.currentMetric().Spec.StableWindow)
+				stats, err := c.getScraper().BulkScrape(c.currentMetric().Spec.StableWindow, metric)
 				if err != nil {
 					copy := metric.DeepCopy()
 					switch {
@@ -304,11 +299,10 @@ func newCollection(metric *av1alpha1.Metric, scraper StatsScraper, tickFactory f
 					c.updateMetric(copy)
 				}
 
+				println(">> collecting bulk data ...")
 				for _, stat := range stats {
-					if stat != emptyStat && stat.RevisionName == metric.ObjectMeta.Labels[serving.RevisionLabelKey] {
-						println(">> recording stat for: ", stat.RevisionName, stat.PodName, stat.RequestCount, stat.ProxiedRequestCount, stat.Time.String())
-						c.record(stat)
-					}
+					println(">> recording stat for: ", stat.RevisionName, stat.PodName, stat.RequestCount, stat.ProxiedRequestCount, stat.Time.String())
+					c.record(stat)
 				}
 			}
 		}

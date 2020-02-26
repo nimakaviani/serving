@@ -17,6 +17,7 @@ limitations under the License.
 package autoscaler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,10 +28,10 @@ import (
 
 	"k8s.io/apimachinery/pkg/labels"
 	corev1listers "k8s.io/client-go/listers/core/v1"
+	"knative.dev/pkg/logging"
 	av1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
 	"knative.dev/serving/pkg/apis/networking"
 	"knative.dev/serving/pkg/apis/serving"
-	"knative.dev/serving/pkg/resources"
 )
 
 const (
@@ -64,7 +65,8 @@ type StatsScraper interface {
 	// Scrape scrapes the Revision queue metric endpoint. The duration is used
 	// to cutoff young pods, whose stats might skew lower.
 	Scrape(time.Duration) (Stat, error)
-	BulkScrape(time.Duration) ([]Stat, error)
+	BulkScrape(time.Duration, *av1alpha1.Metric) ([]Stat, error)
+	Run(context.Context)
 }
 
 // scrapeClient defines the interface for collecting Revision metrics for a given
@@ -92,44 +94,34 @@ var cacheDisabledClient = &http.Client{
 type ServiceScraper struct {
 	podsLister corev1listers.PodLister
 	sClient    scrapeClient
-	counter    resources.EndpointsCounter
-	url        string
+	revMap     sync.Map
 }
 
 // NewServiceScraper creates a new StatsScraper for the Revision which
 // the given Metric is responsible for.
-func NewServiceScraper(podsLister corev1listers.PodLister, metric *av1alpha1.Metric, counter resources.EndpointsCounter) (*ServiceScraper, error) {
+func NewServiceScraper(podsLister corev1listers.PodLister) (*ServiceScraper, error) {
 	sClient, err := NewHTTPScrapeClient(cacheDisabledClient)
 	if err != nil {
 		return nil, err
 	}
-	return newServiceScraperWithClient(podsLister, metric, counter, sClient)
+	serviceScraper, err := newServiceScraperWithClient(podsLister, sClient)
+	if err != nil {
+		return nil, err
+	}
+	return serviceScraper, nil
 }
 
 func newServiceScraperWithClient(
 	podsLister corev1listers.PodLister,
-	metric *av1alpha1.Metric,
-	counter resources.EndpointsCounter,
 	sClient scrapeClient) (*ServiceScraper, error) {
-	if metric == nil {
-		return nil, errors.New("metric must not be nil")
-	}
-	if counter == nil {
-		return nil, errors.New("counter must not be nil")
-	}
 	if sClient == nil {
 		return nil, errors.New("scrape client must not be nil")
-	}
-	revName := metric.Labels[serving.RevisionLabelKey]
-	if revName == "" {
-		return nil, fmt.Errorf("no Revision label found for Metric %s", metric.Name)
 	}
 
 	return &ServiceScraper{
 		sClient:    sClient,
 		podsLister: podsLister,
-		counter:    counter,
-		url:        urlFromTarget(metric.Spec.ScrapeTarget, metric.ObjectMeta.Namespace),
+		revMap:     sync.Map{},
 	}, nil
 }
 
@@ -141,176 +133,72 @@ func urlFromTarget(t, ns string) string {
 
 // Scrape calls the destination service then sends it
 // to the given stats channel.
-func (s *ServiceScraper) BulkScrape(window time.Duration) ([]Stat, error) {
-	println(">> bulk scrape ...")
-	pods, err := s.podsLister.Pods("knative-serving").List(labels.SelectorFromSet(labels.Set{
-		"knative.dev/scraper": "devel",
-	}))
-	if err != nil {
-		return nil, err
+func (s *ServiceScraper) BulkScrape(window time.Duration, metric *av1alpha1.Metric) ([]Stat, error) {
+	revisionName := metric.ObjectMeta.Labels[serving.RevisionLabelKey]
+	if v, ok := s.revMap.Load(revisionName); ok {
+		// TODO nimak - there is probably some race here when deleting
+		// revision stats
+		defer s.revMap.Delete(revisionName)
+		return v.([]Stat), nil
 	}
+	return nil, fmt.Errorf("no metrics for revision %s", revisionName)
+}
 
-	println(">> len(pods)", len(pods))
-
-	stats := []Stat{}
-	mux := sync.Mutex{}
-	grp := errgroup.Group{}
-	for _, p := range pods {
-		p := p
-		grp.Go(func() error {
-			// TODO nimak: fix the port here
-			url := fmt.Sprintf("http://%s:%s/", p.Status.PodIP, "8101")
-			fmt.Printf(">> scrape-url: %s\n", url)
-			stat, err := s.tryBulkScrape(url)
+func (s *ServiceScraper) Run(ctx context.Context) {
+	logger := logging.FromContext(ctx)
+	ticker := time.NewTicker(time.Second)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			logger.Infof(">> bulk scrape ...")
+			pods, err := s.podsLister.Pods("knative-serving").List(labels.SelectorFromSet(labels.Set{
+				"knative.dev/scraper": "devel",
+			}))
 			if err != nil {
-				fmt.Printf("error scraping %s: %v\n", url, err)
-				return err
+				logger.Errorf("failed listing pods %v", err)
+				continue
 			}
 
-			mux.Lock()
-			defer mux.Unlock()
-			stats = append(stats, stat...)
+			logger.Infof(">> len(pods): %d", len(pods))
+			grp := errgroup.Group{}
+			for _, p := range pods {
+				p := p
+				grp.Go(func() error {
+					// TODO nimak: fix the port here
+					url := fmt.Sprintf("http://%s:%s/", p.Status.PodIP, "8101")
+					fmt.Printf(">> scrape-url: %s\n", url)
+					stats, err := s.tryBulkScrape(url)
+					if err != nil {
+						fmt.Printf("error scraping %s: %v\n", url, err)
+						return err
+					}
 
-			return nil
-		})
-	}
+					for _, stat := range stats {
+						var stats []Stat
+						if v, ok := s.revMap.Load(stat.RevisionName); ok {
+							stats = v.([]Stat)
+						}
+						stats = append(stats, stat)
+						s.revMap.Store(stat.RevisionName, stats)
+					}
 
-	if err := grp.Wait(); err != nil {
-		return nil, err
+					return nil
+				})
+			}
+
+			if err := grp.Wait(); err != nil {
+				logger.Errorf("scraping failed: %w", err)
+			}
+		}
 	}
-	return stats, nil
 }
 
 // Scrape calls the destination service then sends it
 // to the given stats channel.
 func (s *ServiceScraper) Scrape(window time.Duration) (Stat, error) {
-	readyPodsCount, err := s.counter.ReadyCount()
-	if err != nil {
-		return emptyStat, ErrFailedGetEndpoints
-	}
-
-	if readyPodsCount == 0 {
-		return emptyStat, nil
-	}
-
-	sampleSize := populationMeanSampleSize(readyPodsCount)
-	oldStatCh := make(chan Stat, sampleSize)
-	youngStatCh := make(chan Stat, sampleSize)
-	scrapedPods := &sync.Map{}
-
-	grp := errgroup.Group{}
-	youngPodCutOffSecs := window.Seconds()
-	for i := 0; i < sampleSize; i++ {
-		grp.Go(func() error {
-			for tries := 1; ; tries++ {
-				stat, err := s.tryScrape(scrapedPods)
-				if err == nil {
-					if stat.ProcessUptime >= youngPodCutOffSecs {
-						// We run |sampleSize| go routies and each of them terminates
-						// as soon as it sees stat from an `oldPod`.
-						// The channel is allocated to |sampleSize|, thus this will never
-						// deadlock.
-						oldStatCh <- stat
-						return nil
-					} else {
-						select {
-						// This in theory might loop over all the possible pods, thus might
-						// fill up the channel.
-						case youngStatCh <- stat:
-						default:
-							// If so, just return.
-							return nil
-						}
-					}
-				} else if tries >= scraperMaxRetries {
-					// Return the error if we exhausted our retries and
-					// we had an error returned (we can end up here if
-					// all the pods were young, which is not an error condition).
-					return err
-				}
-			}
-		})
-	}
-	// Now at this point we have two possibilities.
-	// 1. We scraped |sampleSize| distinct pods, with the invariant of
-	// 		   sampleSize <= len(oldStatCh) + len(youngStatCh) <= sampleSize*2.
-	//    Note, that `err` might still be non-nil, especially when the overall
-	//    pod population is small.
-	//    Consider the following case: sampleSize=3, in theory the first go routine
-	//    might scrape 2 pods, the second 1 and the third won't be be able to scrape
-	//		any unseen pod, so it will return `ErrDidNotReceiveStat`.
-	// 2. We did not: in this case `err` below will be non-nil.
-
-	// Return the inner error, if any.
-	if err := grp.Wait(); err != nil {
-		// Ignore the error if we have received enough statistics.
-		if err != ErrDidNotReceiveStat || len(oldStatCh)+len(youngStatCh) < sampleSize {
-			return emptyStat, fmt.Errorf("unsuccessful scrape, sampleSize=%d: %w", sampleSize, err)
-		}
-	}
-	close(oldStatCh)
-	close(youngStatCh)
-
-	var (
-		avgConcurrency        float64
-		avgProxiedConcurrency float64
-		reqCount              float64
-		proxiedReqCount       float64
-	)
-
-	oldCnt := len(oldStatCh)
-	for stat := range oldStatCh {
-		avgConcurrency += stat.AverageConcurrentRequests
-		avgProxiedConcurrency += stat.AverageProxiedConcurrentRequests
-		reqCount += stat.RequestCount
-		proxiedReqCount += stat.ProxiedRequestCount
-	}
-	for i := oldCnt; i < sampleSize; i++ {
-		// This will always succeed, see reasoning above.
-		stat := <-youngStatCh
-		avgConcurrency += stat.AverageConcurrentRequests
-		avgProxiedConcurrency += stat.AverageProxiedConcurrentRequests
-		reqCount += stat.RequestCount
-		proxiedReqCount += stat.ProxiedRequestCount
-	}
-
-	count := float64(sampleSize)
-	frpc := float64(readyPodsCount)
-	avgConcurrency = avgConcurrency / count
-	avgProxiedConcurrency = avgProxiedConcurrency / count
-	reqCount = reqCount / count
-	proxiedReqCount = proxiedReqCount / count
-
-	// Assumption: A particular pod can stand for other pods, i.e. other pods
-	// have similar concurrency and QPS.
-	//
-	// Hide the actual pods behind scraper and send only one stat for all the
-	// customer pods per scraping. The pod name is set to a unique value, i.e.
-	// scraperPodName so in autoscaler all stats are either from activator or
-	// scraper.
-	return Stat{
-		Time:                             time.Now(),
-		PodName:                          scraperPodName,
-		AverageConcurrentRequests:        avgConcurrency * frpc,
-		AverageProxiedConcurrentRequests: avgProxiedConcurrency * frpc,
-		RequestCount:                     reqCount * frpc,
-		ProxiedRequestCount:              proxiedReqCount * frpc,
-	}, nil
-}
-
-// tryScrape runs a single scrape and returns stat if this is a pod that has not been
-// seen before. An error otherwise or if scraping failed.
-func (s *ServiceScraper) tryScrape(scrapedPods *sync.Map) (Stat, error) {
-	stat, err := s.sClient.Scrape(s.url)
-	if err != nil {
-		return emptyStat, err
-	}
-
-	if _, exists := scrapedPods.LoadOrStore(stat.PodName, struct{}{}); exists {
-		return emptyStat, ErrDidNotReceiveStat
-	}
-
-	return stat, nil
+	return emptyStat, nil
 }
 
 func (s *ServiceScraper) tryBulkScrape(url string) ([]Stat, error) {

@@ -31,7 +31,6 @@ import (
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/util/wait"
 	corev1informers "k8s.io/client-go/informers/core/v1"
-	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/rest"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
 	endpointsinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/endpoints"
@@ -46,13 +45,11 @@ import (
 	"knative.dev/pkg/signals"
 	"knative.dev/pkg/system"
 	"knative.dev/pkg/version"
-	av1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
 	"knative.dev/serving/pkg/apis/serving"
 	"knative.dev/serving/pkg/autoscaler"
 	"knative.dev/serving/pkg/autoscaler/statserver"
 	"knative.dev/serving/pkg/reconciler/autoscaling/kpa"
 	"knative.dev/serving/pkg/reconciler/metric"
-	"knative.dev/serving/pkg/resources"
 )
 
 const (
@@ -137,7 +134,12 @@ func main() {
 	endpointsInformer := endpointsinformer.Get(ctx)
 	podsInformer := podsinformer.Get(ctx)
 
-	collector := autoscaler.NewMetricCollector(statsScraperFactoryFunc(podsInformer.Lister(), endpointsInformer.Lister()), logger)
+	statsScraper, err := autoscaler.NewServiceScraper(podsInformer.Lister())
+	if err != nil {
+		logger.Fatalw("Failed to get stats scraper %w", err)
+	}
+	go statsScraper.Run(ctx)
+	collector := autoscaler.NewMetricCollector(statsScraper, logger)
 	customMetricsAdapter.WithCustomMetrics(autoscaler.NewMetricProvider(collector))
 
 	// Set up scalers.
@@ -212,14 +214,6 @@ func uniScalerFactoryFunc(endpointsInformer corev1informers.EndpointsInformer,
 		}
 
 		return autoscaler.New(decider.Namespace, decider.Name, metricClient, endpointsInformer.Lister(), &decider.Spec, reporter)
-	}
-}
-
-func statsScraperFactoryFunc(podsLister corev1listers.PodLister, endpointsLister corev1listers.EndpointsLister) autoscaler.StatsScraperFactory {
-	return func(metric *av1alpha1.Metric) (autoscaler.StatsScraper, error) {
-		podCounter := resources.NewScopedEndpointsCounter(
-			endpointsLister, metric.Namespace, metric.Spec.ScrapeTarget)
-		return autoscaler.NewServiceScraper(podsLister, metric, podCounter)
 	}
 }
 

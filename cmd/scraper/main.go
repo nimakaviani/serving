@@ -28,6 +28,7 @@ import (
 	"github.com/kelseyhightower/envconfig"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/injection"
@@ -74,7 +75,7 @@ type config struct {
 }
 
 func revisionPodKey(revisionUID, podName string) string {
-	return fmt.Sprintf("%s-%s", revisionUID, podName)
+	return fmt.Sprintf("%s--%s", revisionUID, podName)
 }
 
 type metricsScraper struct {
@@ -198,8 +199,8 @@ func (s *metricsScraper) pollMetricsData(ctx context.Context, logger *zap.Sugare
 			podName := p.ObjectMeta.Name
 			podConfig, podRevision := p.ObjectMeta.Labels[serving.ConfigurationLabelKey], p.ObjectMeta.Labels[serving.RevisionLabelKey]
 			podRevisionUID := p.ObjectMeta.Labels[serving.RevisionUID]
-
 			podRevisionKey := revisionPodKey(podRevisionUID, podName)
+
 			logger.Infof("scraping data for pod: %s: %#v", podRevisionKey, stat)
 
 			var recorder *stats.PrometheusStatsRecorder
@@ -227,6 +228,7 @@ func (s *metricsScraper) pollMetricsData(ctx context.Context, logger *zap.Sugare
 		return err
 	}
 
+	go s.unregisterMissing(podList.Items, logger)
 	return nil
 }
 
@@ -240,8 +242,46 @@ var cacheDisabledClient = &http.Client{
 	Timeout: 3 * time.Second,
 }
 
+func (s *metricsScraper) unregisterMissing(podItems []corev1.Pod, logger *zap.SugaredLogger) {
+	logger.Infof("pods on node %s: %d", s.node, len(podItems))
+	podKeys := make(map[string]struct{}, len(podItems))
+	for _, p := range podItems {
+		podName := p.ObjectMeta.Name
+		podRevisionUID := p.ObjectMeta.Labels[serving.RevisionUID]
+		podKeys[revisionPodKey(podRevisionUID, podName)] = struct{}{}
+	}
+
+	toBeRemoved := make([]string, 0, len(podItems))
+	s.statRecorders.Range(func(key, value interface{}) bool {
+		podKey := key.(string)
+		if _, ok := podKeys[podKey]; ok {
+			logger.Infof("found-key: %s", podKey)
+			delete(podKeys, podKey)
+			return true
+		}
+
+		toBeRemoved = append(toBeRemoved, podKey)
+		return true
+	})
+
+	for _, key := range toBeRemoved {
+		logger.Infof("testing key: %s", key)
+		value, ok := s.statRecorders.Load(key)
+		if !ok {
+			continue
+		}
+
+		logger.Infof("node[%s]: deleting missing pod %s", s.node, key)
+		recorder := value.(*stats.PrometheusStatsRecorder)
+		success := s.reporter.Unregister(recorder)
+		logger.Info("success: %t", success)
+		s.statRecorders.Delete(key)
+	}
+}
+
 func urlFromTarget(podIP string) string {
 	return fmt.Sprintf(
 		"http://%s:%d/metrics",
 		podIP, networking.AutoscalingQueueMetricsPort)
 }
+

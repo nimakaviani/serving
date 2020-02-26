@@ -306,7 +306,7 @@ func newCollection(metric *av1alpha1.Metric, scraper StatsScraper, tickFactory f
 
 				for _, stat := range stats {
 					if stat != emptyStat && stat.RevisionName == metric.ObjectMeta.Labels[serving.RevisionLabelKey] {
-						println(">> recording stat for: ", stat.RevisionName, stat.PodName, stat.RequestCount, stat.ProxiedRequestCount)
+						println(">> recording stat for: ", stat.RevisionName, stat.PodName, stat.RequestCount, stat.ProxiedRequestCount, stat.Time.String())
 						c.record(stat)
 					}
 				}

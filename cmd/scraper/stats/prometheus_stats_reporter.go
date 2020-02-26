@@ -53,6 +53,7 @@ func newGV(n, h string) *prometheus.GaugeVec {
 type PrometheusStatsRecorder struct {
 	startTime       time.Time
 	reportingPeriod time.Duration
+	labels          prometheus.Labels
 
 	requestsPerSecond                prometheus.Gauge
 	proxiedRequestsPerSecond         prometheus.Gauge
@@ -98,6 +99,7 @@ func NewPrometheusStatsRecorder(namespace, config, revision, pod string, r *Prom
 	return &PrometheusStatsRecorder{
 		startTime:       time.Now(),
 		reportingPeriod: r.reportingPeriod,
+		labels:          labels,
 
 		requestsPerSecond:                r.requestsPerSecondGV.With(labels),
 		proxiedRequestsPerSecond:         r.proxiedRequestsPerSecondGV.With(labels),
@@ -164,4 +166,12 @@ func (r *PrometheusStatsRecorder) Report(acr float64, apcr float64, rc float64, 
 // PrometheusStatsReporter.
 func (r *PrometheusStatsReporter) Handler() http.Handler {
 	return r.handler
+}
+
+func (r *PrometheusStatsReporter) Unregister(recorder *PrometheusStatsRecorder) bool {
+	return r.requestsPerSecondGV.Delete(recorder.labels) &&
+		r.averageConcurrentRequestsGV.Delete(recorder.labels) &&
+		r.averageProxiedConcurrentRequestsGV.Delete(recorder.labels) &&
+		r.proxiedRequestsPerSecondGV.Delete(recorder.labels) &&
+		r.processUptimeGV.Delete(recorder.labels)
 }
